@@ -67,6 +67,8 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
   val credentialManager = remember(context) { CredentialManager.create(context) }
 
   var isLoading by remember { mutableStateOf(false) }
+  var isBrowserLoading by remember { mutableStateOf(false) }
+  var showBrowserFallback by remember { mutableStateOf(false) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
   var clockNowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
 
@@ -238,7 +240,7 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
             ) {
               Text(
                 text = errorMessage!!,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onErrorContainer,
                 modifier = Modifier.padding(12.dp),
               )
@@ -260,13 +262,19 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
                 },
                 onAuthError = { msg ->
                   isLoading = false
+                  showBrowserFallback = true
                   errorMessage = msg
                 },
                 scope = scope,
-                onAuthCancelled = { isLoading = false },
+                onAuthCancelled = {
+                  isLoading = false
+                  showBrowserFallback = true
+                  errorMessage =
+                    "Google Sign-In did not finish. If selecting your account returns here (SHA-1 mismatch on custom APK), tap Browser Google Sign-In below."
+                },
               )
             },
-            enabled = !isLoading,
+            enabled = !isLoading && !isBrowserLoading,
             shape = RoundedCornerShape(24.dp),
             colors =
               ButtonDefaults.buttonColors(
@@ -288,6 +296,43 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
                 text = stringResource(R.string.sign_in_google),
                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
               )
+            }
+          }
+
+          if (showBrowserFallback) {
+            Spacer(modifier = Modifier.height(10.dp))
+            androidx.compose.material3.OutlinedButton(
+              onClick = {
+                errorMessage = null
+                isBrowserLoading = true
+                GoogleAuthHelper.signInWithGoogleBrowserFallback(
+                  context = context,
+                  onAuthSuccess = {
+                    isBrowserLoading = false
+                    onAuthSuccess()
+                  },
+                  onAuthError = { msg ->
+                    isBrowserLoading = false
+                    errorMessage = msg
+                  },
+                  scope = scope,
+                )
+              },
+              enabled = !isLoading && !isBrowserLoading,
+              shape = RoundedCornerShape(24.dp),
+              modifier =
+                Modifier.fillMaxWidth().height(48.dp).testTag("google_browser_sign_in_button"),
+            ) {
+              if (isBrowserLoading) {
+                CircularProgressIndicator(
+                  modifier = Modifier.size(20.dp),
+                  strokeWidth = 2.dp,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Opening Google Sign-In…")
+              } else {
+                Text("Browser Google Sign-In")
+              }
             }
           }
         }

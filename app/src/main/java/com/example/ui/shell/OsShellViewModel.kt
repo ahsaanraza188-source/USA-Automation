@@ -309,6 +309,10 @@ class OsShellViewModel(
     _shellState.value = _shellState.value.copy(statusMessage = null)
   }
 
+  fun showStatus(msg: String) {
+    postStatus(msg)
+  }
+
   private fun postStatus(msg: String) {
     _shellState.value = _shellState.value.copy(statusMessage = msg)
   }

@@ -85,6 +85,7 @@ import com.example.ui.apps.SettingsApp
 import com.example.ui.apps.YouTubeApp
 import com.example.ui.shell.AppDrawerOverlay
 import com.example.ui.shell.DiagnosticsViewModel
+import com.example.ui.shell.FloatingControlPill
 import com.example.ui.shell.GoogleServicesViewModel
 import com.example.ui.shell.OsShellViewModel
 import com.example.ui.shell.QuickSettingsShadeOverlay
@@ -660,6 +661,18 @@ fun VirtualOsRoot(
           },
           onBrightnessChange = shellViewModel::setBrightness,
           onOpenApp = shellViewModel::launchApp,
+        )
+
+        FloatingControlPill(
+          onBack = handleBackAction,
+          onHome = {
+            if (shellState.activeApp == VirtualAppId.CHROME) {
+              browserSessionManager.persistImmediately()
+            }
+            shellViewModel.goHome()
+          },
+          onStatusMessage = shellViewModel::showStatus,
+          modifier = Modifier.align(Alignment.CenterEnd).zIndex(5f),
         )
       }
     }

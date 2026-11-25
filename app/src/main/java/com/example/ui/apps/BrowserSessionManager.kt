@@ -1,7 +1,9 @@
 package com.example.ui.apps
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Message
@@ -9,35 +11,50 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
+import android.webkit.HttpAuthHandler
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.BrowserBookmark
 import com.example.data.local.BrowserSessionStore
 import com.example.data.local.PersistedBrowserTab
 import com.example.data.model.BrowserVault
+import com.example.data.network.AppDiagnosticsLogger
+import com.example.data.network.ProxyTunnelController
 import com.example.data.repository.VirtualOsDataSource
+import com.example.domain.BrowserGeoPermissionMode
+import com.example.domain.VirtualLocationConfig
+import com.example.domain.VirtualLocationMode
 import java.net.URLEncoder
+import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
-
-import android.webkit.WebResourceError
-import com.example.data.network.AppDiagnosticsLogger
 
 data class BrowserHistoryEntry(
   val title: String,
   val url: String,
   val visitedAtMillis: Long = System.currentTimeMillis(),
+)
+
+data class PendingGeoPrompt(
+  val origin: String,
+  val callback: GeolocationPermissions.Callback,
 )
 
 data class BrowserUiState(
@@ -50,6 +67,8 @@ data class BrowserUiState(
   val canGoBack: Boolean = false,
   val canGoForward: Boolean = false,
   val syncedDomainsCount: Int = 0,
+  val pendingGeoPromptOrigin: String? = null,
+  val lastGeoStatusMessage: String? = null,
 ) {
   val activeTab: PersistedBrowserTab
     get() = tabs.getOrElse(activeTabIndex) { tabs.first() }
@@ -57,13 +76,14 @@ data class BrowserUiState(
 
 /**
  * ViewModel-scoped Chrome controller that retains live WebViews across configuration changes
- * and Home/App switches, flushes CookieManager immediately, and syncs tabs, cookies, and
- * web localStorage to both DataStore and Firebase Firestore BrowserVault.
+ * and Home/App switches, routes through ProxyTunnelController when active, enforces Virtual
+ * GPS & Geolocation permission policies, and syncs tabs, cookies, and web localStorage.
  */
 class BrowserSessionManager(
   private val appContext: Context,
   private val userId: String,
   private val repository: VirtualOsDataSource,
+  private val proxyTunnelController: ProxyTunnelController? = null,
   private val store: BrowserSessionStore = BrowserSessionStore(appContext),
 ) : ViewModel() {
 
@@ -71,9 +91,13 @@ class BrowserSessionManager(
   private val cookiesMap = mutableMapOf<String, String>()
   private val webStorageMap = mutableMapOf<String, String>()
   private val restoredStorageOrigins = mutableSetOf<String>()
+  private val siteGeoPermissions = mutableMapOf<String, Boolean>()
 
   private var persistJob: Job? = null
   private var pendingExternalUrl: String? = null
+  private var pendingGeoPrompt: PendingGeoPrompt? = null
+
+  @Volatile private var locationConfig: VirtualLocationConfig = VirtualLocationConfig()
 
   private val _uiState = MutableStateFlow(BrowserUiState())
   val uiState: StateFlow<BrowserUiState> = _uiState.asStateFlow()
@@ -102,7 +126,6 @@ class BrowserSessionManager(
           else -> BrowserSessionStore.defaultBookmarks()
         }
 
-      // Merge cloud and local cookies/storage (local takes priority for fresher same-device edits)
       cookiesMap.clear()
       cookiesMap.putAll(cloudCookies)
       cookiesMap.putAll(local.cookiesMap)
@@ -138,6 +161,294 @@ class BrowserSessionManager(
     }
   }
 
+  fun updateVirtualLocationConfig(config: VirtualLocationConfig) {
+    val changed = locationConfig != config
+    locationConfig = config
+    if (changed) {
+      siteGeoPermissions.clear()
+      webViews.values.forEach { wv ->
+        injectGeolocationAndPrivacyShim(wv, wv.url)
+      }
+    }
+  }
+
+  fun respondToPendingGeoPrompt(allow: Boolean) {
+    val prompt = pendingGeoPrompt ?: return
+    pendingGeoPrompt = null
+    val originKey = originOf(prompt.origin) ?: prompt.origin
+    siteGeoPermissions[originKey] = allow
+    runCatching { prompt.callback.invoke(prompt.origin, allow, false) }
+    val activeWv = webViews[_uiState.value.activeTab.id]
+    if (activeWv != null) {
+      injectGeolocationAndPrivacyShim(activeWv, activeWv.url)
+    }
+    _uiState.value =
+      _uiState.value.copy(
+        pendingGeoPromptOrigin = null,
+        lastGeoStatusMessage =
+          if (allow) "Granted Virtual GPS (${locationConfig.formattedCoordinates}) to $originKey"
+          else "Blocked geolocation for $originKey",
+      )
+  }
+
+  private fun isOriginAllowedForVirtualGeo(urlOrOrigin: String?): Boolean {
+    val cfg = locationConfig
+    if (!cfg.enabled || cfg.mode == VirtualLocationMode.DISABLED) return false
+    if (cfg.mode == VirtualLocationMode.PHYSICAL_DEVICE) return false
+    return when (cfg.browserPermission) {
+      BrowserGeoPermissionMode.ALLOW -> true
+      BrowserGeoPermissionMode.BLOCK -> false
+      BrowserGeoPermissionMode.ASK -> {
+        val originKey = originOf(urlOrOrigin) ?: return false
+        siteGeoPermissions[originKey] == true
+      }
+    }
+  }
+
+  private fun buildGeoAndPrivacyScript(originUrl: String?): String {
+    val cfg = locationConfig
+    val sb = StringBuilder()
+
+    // 1. Virtual Geolocation shim when Virtual GPS is enabled
+    if (cfg.enabled && cfg.mode == VirtualLocationMode.VIRTUAL_GPS) {
+      val allowed = isOriginAllowedForVirtualGeo(originUrl)
+      val blocked = cfg.browserPermission == BrowserGeoPermissionMode.BLOCK
+      if (allowed) {
+        sb.append(
+          """
+          (function() {
+            try {
+              var lat = ${cfg.latitude};
+              var lon = ${cfg.longitude};
+              var acc = ${cfg.accuracyMeters};
+              function buildPos() {
+                return {
+                  coords: {
+                    latitude: lat,
+                    longitude: lon,
+                    accuracy: acc,
+                    altitude: null,
+                    altitudeAccuracy: null,
+                    heading: null,
+                    speed: null
+                  },
+                  timestamp: Date.now()
+                };
+              }
+              var geoImpl = {
+                getCurrentPosition: function(success, error, opts) {
+                  if (typeof success === 'function') {
+                    setTimeout(function() { success(buildPos()); }, 15);
+                  }
+                },
+                watchPosition: function(success, error, opts) {
+                  if (typeof success === 'function') {
+                    setTimeout(function() { success(buildPos()); }, 15);
+                  }
+                  return Math.floor(Math.random() * 10000) + 1;
+                },
+                clearWatch: function(id) {}
+              };
+              try {
+                Object.defineProperty(navigator, 'geolocation', {
+                  configurable: true,
+                  value: geoImpl
+                });
+              } catch (e) {
+                navigator.geolocation.getCurrentPosition = geoImpl.getCurrentPosition;
+                navigator.geolocation.watchPosition = geoImpl.watchPosition;
+                navigator.geolocation.clearWatch = geoImpl.clearWatch;
+              }
+            } catch (err) {}
+          })();
+          """.trimIndent()
+        )
+      } else if (blocked) {
+        sb.append(
+          """
+          (function() {
+            try {
+              var deniedGeo = {
+                getCurrentPosition: function(success, error) {
+                  if (typeof error === 'function') {
+                    error({ code: 1, message: 'Geolocation blocked by Virtual Location Manager', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+                  }
+                },
+                watchPosition: function(success, error) {
+                  if (typeof error === 'function') {
+                    error({ code: 1, message: 'Geolocation blocked by Virtual Location Manager', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+                  }
+                  return 0;
+                },
+                clearWatch: function() {}
+              };
+              try {
+                Object.defineProperty(navigator, 'geolocation', { configurable: true, value: deniedGeo });
+              } catch (e) {
+                navigator.geolocation.getCurrentPosition = deniedGeo.getCurrentPosition;
+              }
+            } catch (err) {}
+          })();
+          """.trimIndent()
+        )
+      }
+    } else if (!cfg.enabled || cfg.mode == VirtualLocationMode.DISABLED) {
+      sb.append(
+        """
+        (function() {
+          try {
+            var disabledGeo = {
+              getCurrentPosition: function(success, error) {
+                if (typeof error === 'function') {
+                  error({ code: 2, message: 'Virtual GPS disabled', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+                }
+              },
+              watchPosition: function(success, error) {
+                if (typeof error === 'function') {
+                  error({ code: 2, message: 'Virtual GPS disabled', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+                }
+                return 0;
+              },
+              clearWatch: function() {}
+            };
+            try {
+              Object.defineProperty(navigator, 'geolocation', { configurable: true, value: disabledGeo });
+            } catch (e) {}
+          } catch (err) {}
+        })();
+        """.trimIndent()
+      )
+    }
+
+    // 2. WebRTC LAN/Host IP leak guard when enabled
+    if (cfg.webrtcLeakProtection) {
+      sb.append(
+        """
+        (function() {
+          try {
+            if (!window.__usaWebRtcGuarded && window.RTCPeerConnection) {
+              window.__usaWebRtcGuarded = true;
+              var OrigRTC = window.RTCPeerConnection;
+              window.RTCPeerConnection = function(config, constraints) {
+                var safeConfig = Object.assign({}, config || {}, { iceServers: [] });
+                return new OrigRTC(safeConfig, constraints);
+              };
+              window.RTCPeerConnection.prototype = OrigRTC.prototype;
+            }
+          } catch (err) {}
+        })();
+        """.trimIndent()
+      )
+    }
+
+    return sb.toString()
+  }
+
+  private fun injectGeolocationAndPrivacyShim(view: WebView?, url: String?) {
+    if (view == null) return
+    val script = buildGeoAndPrivacyScript(url)
+    if (script.isNotBlank()) {
+      view.evaluateJavascript(script, null)
+    }
+  }
+
+  /**
+   * Executes a live geolocation verification test inside an actual Android WebView
+   * using `navigator.geolocation.getCurrentPosition(...)` and returns the real result.
+   */
+  @SuppressLint("SetJavaScriptEnabled")
+  suspend fun runGeolocationVerificationProbe(): String =
+    withContext(Dispatchers.Main) {
+      val cfg = locationConfig
+      if (!cfg.enabled || cfg.mode == VirtualLocationMode.DISABLED) {
+        return@withContext "FAIL: Virtual GPS is disabled. Enable it in Virtual GPS tab."
+      }
+      if (cfg.browserPermission == BrowserGeoPermissionMode.BLOCK) {
+        return@withContext "FAIL: Browser Geolocation Permission is set to Block All."
+      }
+      val testOrigin = "https://geo-verify.localhost/"
+      val probeWv =
+        WebView(appContext).apply {
+          settings.javaScriptEnabled = true
+          settings.domStorageEnabled = true
+        }
+      try {
+        val loaded =
+          suspendCancellableCoroutine { cont ->
+            probeWv.webViewClient =
+              object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                  if (cont.isActive) cont.resume(true)
+                }
+              }
+            probeWv.loadDataWithBaseURL(
+              testOrigin,
+              "<html><body><p>USA Geo Probe</p></body></html>",
+              "text/html",
+              "UTF-8",
+              null,
+            )
+          }
+        if (!loaded) return@withContext "FAIL: WebView probe failed to initialize"
+
+        val allowOverride =
+          cfg.mode == VirtualLocationMode.VIRTUAL_GPS &&
+            (cfg.browserPermission == BrowserGeoPermissionMode.ALLOW ||
+              cfg.browserPermission == BrowserGeoPermissionMode.ASK)
+        if (allowOverride) {
+          siteGeoPermissions["https://geo-verify.localhost"] = true
+        }
+        injectGeolocationAndPrivacyShim(probeWv, testOrigin)
+
+        val triggerScript =
+          """
+          (function() {
+            window.__usaGeoProbe = "PENDING";
+            try {
+              navigator.geolocation.getCurrentPosition(
+                function(pos) {
+                  window.__usaGeoProbe = "PASS:" + pos.coords.latitude.toFixed(4) + "," + pos.coords.longitude.toFixed(4) + ":" + Math.round(pos.coords.accuracy);
+                },
+                function(err) {
+                  window.__usaGeoProbe = "FAIL:" + (err && err.message ? err.message : ("Code " + err.code));
+                },
+                { enableHighAccuracy: true, timeout: 3000 }
+              );
+            } catch (e) {
+              window.__usaGeoProbe = "FAIL:" + e.message;
+            }
+          })();
+          """.trimIndent()
+        probeWv.evaluateJavascript(triggerScript, null)
+        delay(220L)
+
+        val raw =
+          suspendCancellableCoroutine<String> { cont ->
+            probeWv.evaluateJavascript("window.__usaGeoProbe") { res ->
+              if (cont.isActive) cont.resume(res ?: "")
+            }
+          }
+        val clean = runCatching { JSONObject("{\"v\":$raw}").optString("v") }.getOrDefault(raw.trim('"'))
+        when {
+          clean.startsWith("PASS:") -> {
+            val parts = clean.removePrefix("PASS:").split(":")
+            val coords = parts.getOrNull(0).orEmpty()
+            val acc = parts.getOrNull(1) ?: "18"
+            "PASS: Browser returned $coords (±${acc}m)"
+          }
+          clean.startsWith("FAIL:") -> clean
+          else -> "FAIL: Unexpected geolocation probe state ($clean)"
+        }
+      } catch (e: Exception) {
+        "FAIL: ${e.message ?: "Probe exception"}"
+      } finally {
+        runCatching {
+          probeWv.stopLoading()
+          probeWv.destroy()
+        }
+      }
+    }
+
   private fun configureGlobalCookies() {
     runCatching {
       CookieManager.getInstance().apply {
@@ -172,7 +483,6 @@ class BrowserSessionManager(
                   ) {
                     append("; Domain=.google.com")
                   }
-                  // Preserve session cookies for 30 days across restarts
                   append("; Max-Age=2592000")
                 }
                 cm.setCookie(url, cookieLine)
@@ -199,7 +509,6 @@ class BrowserSessionManager(
     _uiState.value.tabs.forEach { tab ->
       originOf(tab.url)?.let { urlsToCapture.add("$it/") }
     }
-    // Always snapshot key Google origins if user visited Google/Gmail/YouTube
     val touchesGoogle =
       urlsToCapture.any { it.contains("google.com", ignoreCase = true) || it.contains("youtube.com", ignoreCase = true) }
     if (touchesGoogle) {
@@ -227,7 +536,6 @@ class BrowserSessionManager(
     if (view == null || url.isNullOrBlank() || !url.startsWith("http")) return
     val origin = originOf(url) ?: return
 
-    // Restore saved localStorage tokens once per origin if not yet restored this session
     val savedJson = webStorageMap[origin]
     if (!savedJson.isNullOrBlank() && !restoredStorageOrigins.contains(origin)) {
       restoredStorageOrigins.add(origin)
@@ -309,7 +617,7 @@ class BrowserSessionManager(
     schedulePersist()
     val existingWv = webViews[active.id]
     if (existingWv != null) {
-      existingWv.loadUrl(resolved)
+      existingWv.loadUrl(resolved, mapOf("Accept-Language" to "en-US,en;q=0.9"))
     }
   }
 
@@ -410,6 +718,7 @@ class BrowserSessionManager(
     cookiesMap.clear()
     webStorageMap.clear()
     restoredStorageOrigins.clear()
+    siteGeoPermissions.clear()
     webViews.values.forEach { wv ->
       wv.clearCache(true)
       wv.clearHistory()
@@ -452,6 +761,7 @@ class BrowserSessionManager(
           domStorageEnabled = true
           @Suppress("DEPRECATION")
           databaseEnabled = true
+          setGeolocationEnabled(true)
           cacheMode = WebSettings.LOAD_DEFAULT
           useWideViewPort = true
           loadWithOverviewMode = true
@@ -460,7 +770,6 @@ class BrowserSessionManager(
           javaScriptCanOpenWindowsAutomatically = true
           setSupportMultipleWindows(true)
           mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-          // Clean User-Agent so Google Accounts / Gmail / OAuth sign-in never gets blocked as WebView
           val defaultUa = WebSettings.getDefaultUserAgent(appContext)
           userAgentString =
             defaultUa
@@ -489,11 +798,26 @@ class BrowserSessionManager(
                 url.startsWith("data:"))
             }
 
+            override fun onReceivedHttpAuthRequest(
+              view: WebView?,
+              handler: HttpAuthHandler?,
+              host: String?,
+              realm: String?,
+            ) {
+              val creds = proxyTunnelController?.getActiveCredentials()
+              if (creds != null && proxyTunnelController.isProxyRoutingActive()) {
+                handler?.proceed(creds.username, creds.password)
+              } else {
+                handler?.cancel()
+              }
+            }
+
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
               if (!url.isNullOrBlank()) {
                 updateTabMetadata(tab.id, url = url, title = null)
                 if (!tab.isIncognito) captureCookiesForUrl(url)
               }
+              injectGeolocationAndPrivacyShim(view, url)
               refreshNavFlags(tab.id)
             }
 
@@ -525,6 +849,7 @@ class BrowserSessionManager(
                   recordHistoryEntry(url, view?.title)
                 }
               }
+              injectGeolocationAndPrivacyShim(view, url)
               if (!tab.isIncognito) schedulePersist()
               refreshNavFlags(tab.id)
             }
@@ -539,7 +864,7 @@ class BrowserSessionManager(
                   component = "Chrome WebView",
                   message = "Page load error for ${request.url}",
                   rootCause = "Code ${error?.errorCode}: ${error?.description}",
-                  recoveryHint = "Run DNS/HTTPS checks in Diagnostics Center.",
+                  recoveryHint = "Check VPN/Proxy status or run DNS/HTTPS checks in Location & Network Center.",
                 )
               }
             }
@@ -583,10 +908,55 @@ class BrowserSessionManager(
               }
               persistImmediately()
             }
+
+            override fun onGeolocationPermissionsShowPrompt(
+              origin: String?,
+              callback: GeolocationPermissions.Callback?,
+            ) {
+              if (origin == null || callback == null) return
+              val cfg = locationConfig
+              val originKey = originOf(origin) ?: origin
+
+              if (!cfg.enabled || cfg.mode == VirtualLocationMode.DISABLED || cfg.browserPermission == BrowserGeoPermissionMode.BLOCK) {
+                callback.invoke(origin, false, false)
+                return
+              }
+
+              if (cfg.mode == VirtualLocationMode.PHYSICAL_DEVICE) {
+                val hasPerm =
+                  ContextCompat.checkSelfPermission(
+                    appContext,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                  ) == PackageManager.PERMISSION_GRANTED
+                callback.invoke(origin, hasPerm, false)
+                return
+              }
+
+              // Virtual GPS mode
+              when (cfg.browserPermission) {
+                BrowserGeoPermissionMode.ALLOW -> {
+                  siteGeoPermissions[originKey] = true
+                  callback.invoke(origin, true, false)
+                }
+                BrowserGeoPermissionMode.ASK -> {
+                  val remembered = siteGeoPermissions[originKey]
+                  if (remembered != null) {
+                    callback.invoke(origin, remembered, false)
+                  } else {
+                    pendingGeoPrompt?.let { prev ->
+                      runCatching { prev.callback.invoke(prev.origin, false, false) }
+                    }
+                    pendingGeoPrompt = PendingGeoPrompt(origin, callback)
+                    _uiState.value = _uiState.value.copy(pendingGeoPromptOrigin = originKey)
+                  }
+                }
+                BrowserGeoPermissionMode.BLOCK -> callback.invoke(origin, false, false)
+              }
+            }
           }
 
         if (!isPopup && tab.url.isNotBlank()) {
-          loadUrl(tab.url)
+          loadUrl(tab.url, mapOf("Accept-Language" to "en-US,en;q=0.9"))
         }
       }
 
@@ -708,6 +1078,7 @@ class BrowserSessionManager(
 
   fun releaseInMemoryViewsKeepingSession() {
     persistImmediately()
+    pendingGeoPrompt = null
     webViews.values.forEach { wv ->
       (wv.parent as? ViewGroup)?.removeView(wv)
       wv.stopLoading()

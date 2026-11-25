@@ -14,10 +14,11 @@ import com.example.data.model.DevicePreferences
 import com.example.domain.CalculatorEngine
 import com.example.domain.RegionalFormatter
 import com.example.domain.VirtualAppCatalog
+import com.example.domain.VirtualLocationCatalog
+import com.example.domain.VirtualLocationConfig
 import java.io.File
 import java.net.InetAddress
 import java.util.TimeZone
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -36,6 +37,7 @@ data class PublicIpReport(
   val providerName: String,
   val isVerifiedUsa: Boolean,
   val checkedAtEpochMillis: Long,
+  val routedVia: String = "Direct / System Network",
 )
 
 data class DeviceTelemetry(
@@ -74,6 +76,18 @@ data class DeviceGeolocationSnapshot(
   val statusLabel: String,
 )
 
+data class LeakCheckReport(
+  val directIp: String?,
+  val directCountry: String?,
+  val routedIp: String?,
+  val routedCountry: String?,
+  val dohResolverReachable: Boolean,
+  val webrtcGuardEnabled: Boolean,
+  val vpnOrProxyActive: Boolean,
+  val dnsLeakRiskLabel: String,
+  val summary: String,
+)
+
 enum class SelfTestStatus {
   PENDING,
   RUNNING,
@@ -87,34 +101,46 @@ data class SelfTestItem(
   val title: String,
   val detail: String,
   val status: SelfTestStatus,
+  val remediation: String = "",
 )
 
-class DiagnosticsNetworkService(private val context: Context) {
-  private val client =
-    OkHttpClient.Builder()
-      .connectTimeout(8, TimeUnit.SECONDS)
-      .readTimeout(8, TimeUnit.SECONDS)
-      .build()
+class DiagnosticsNetworkService(
+  private val context: Context,
+  private val proxyTunnelController: ProxyTunnelController? = null,
+) {
+  private fun activeClient(): OkHttpClient =
+    proxyTunnelController?.getActiveOkHttpClient() ?: directClient()
 
-  suspend fun fetchVerifiedPublicIp(): Result<PublicIpReport> =
+  private fun directClient(): OkHttpClient =
+    proxyTunnelController?.getDirectOkHttpClient() ?: OkHttpClient()
+
+  suspend fun fetchVerifiedPublicIp(clientOverride: OkHttpClient? = null): Result<PublicIpReport> =
     withContext(Dispatchers.IO) {
+      val client = clientOverride ?: activeClient()
+      val routeTag =
+        when {
+          clientOverride != null -> "Configured Proxy Tunnel"
+          proxyTunnelController?.isProxyRoutingActive() == true -> "Configured Proxy Tunnel"
+          readDeviceTelemetry().vpnActive -> "Android System VPN"
+          else -> "Direct Network"
+        }
       val start = System.currentTimeMillis()
-      val primary = runCatching { queryIpWhoIs(start) }
+      val primary = runCatching { queryIpWhoIs(client, start, routeTag) }
       if (primary.isSuccess) {
         val rep = primary.getOrThrow()
         AppDiagnosticsLogger.info(
           component = "Network IP",
-          message = "Verified public IP ${rep.ipAddress} (${rep.countryCode})",
+          message = "Verified public IP ${rep.ipAddress} (${rep.countryCode}) via $routeTag",
           detail = "ISP: ${rep.isp} • ${rep.latencyMs}ms",
         )
         return@withContext primary
       }
-      val fallback = runCatching { queryIpApiCo(start) }
+      val fallback = runCatching { queryIpApiCo(client, start, routeTag) }
       fallback
         .onSuccess { rep ->
           AppDiagnosticsLogger.info(
             component = "Network IP",
-            message = "Verified public IP ${rep.ipAddress} (${rep.countryCode}) via fallback",
+            message = "Verified public IP ${rep.ipAddress} (${rep.countryCode}) via fallback ($routeTag)",
             detail = "ISP: ${rep.isp} • ${rep.latencyMs}ms",
           )
         }
@@ -123,13 +149,13 @@ class DiagnosticsNetworkService(private val context: Context) {
             component = "Network IP",
             message = "Public IP lookup failed across primary & fallback providers",
             throwable = err,
-            recoveryHint = "Check Wi-Fi/cellular data or firewall/VPN settings and tap Refresh.",
+            recoveryHint = "Check Wi-Fi/cellular data, active proxy credentials, or VPN tunnel and tap Refresh.",
           )
         }
       fallback
     }
 
-  private fun queryIpWhoIs(startMillis: Long): PublicIpReport {
+  private fun queryIpWhoIs(client: OkHttpClient, startMillis: Long, routeTag: String): PublicIpReport {
     val req = Request.Builder().url("https://ipwho.is/").get().build()
     client.newCall(req).execute().use { resp ->
       if (!resp.isSuccessful) error("HTTP ${resp.code}")
@@ -151,11 +177,12 @@ class DiagnosticsNetworkService(private val context: Context) {
         providerName = "ipwho.is (HTTPS)",
         isVerifiedUsa = cc == "US",
         checkedAtEpochMillis = System.currentTimeMillis(),
+        routedVia = routeTag,
       )
     }
   }
 
-  private fun queryIpApiCo(startMillis: Long): PublicIpReport {
+  private fun queryIpApiCo(client: OkHttpClient, startMillis: Long, routeTag: String): PublicIpReport {
     val req =
       Request.Builder()
         .url("https://ipapi.co/json/")
@@ -178,6 +205,7 @@ class DiagnosticsNetworkService(private val context: Context) {
         providerName = "ipapi.co (HTTPS)",
         isVerifiedUsa = cc == "US",
         checkedAtEpochMillis = System.currentTimeMillis(),
+        routedVia = routeTag,
       )
     }
   }
@@ -218,6 +246,7 @@ class DiagnosticsNetworkService(private val context: Context) {
 
   suspend fun runHttpsConnectivityTests(): List<HttpsProbeResult> =
     withContext(Dispatchers.IO) {
+      val client = activeClient()
       val targets =
         listOf(
           "Google Connectivity" to "https://www.google.com/generate_204",
@@ -256,7 +285,7 @@ class DiagnosticsNetworkService(private val context: Context) {
             component = "HTTPS",
             message = "HTTPS probe failed for $label",
             throwable = err,
-            recoveryHint = "Check internet connectivity, system clock, or VPN tunnel.",
+            recoveryHint = "Check internet connectivity, system clock, proxy, or VPN tunnel.",
           )
           HttpsProbeResult(
             label = label,
@@ -269,6 +298,61 @@ class DiagnosticsNetworkService(private val context: Context) {
           )
         }
       }
+    }
+
+  suspend fun runLeakDiagnostics(locationConfig: VirtualLocationConfig): LeakCheckReport =
+    withContext(Dispatchers.IO) {
+      val telemetry = readDeviceTelemetry()
+      val proxyActive = proxyTunnelController?.isProxyRoutingActive() == true
+      val routed = fetchVerifiedPublicIp().getOrNull()
+      val direct =
+        if (proxyActive) {
+          runCatching { queryIpWhoIs(directClient(), System.currentTimeMillis(), "Direct Bypass Check") }
+            .getOrNull()
+        } else {
+          routed
+        }
+
+      val dohOk =
+        runCatching {
+          val req = Request.Builder().url("https://dns.google/resolve?name=example.com&type=A").get().build()
+          activeClient().newCall(req).execute().use { it.isSuccessful }
+        }.getOrDefault(false)
+
+      val dnsRisk =
+        when {
+          telemetry.vpnActive -> "Low (System VPN handles DNS + all sockets)"
+          proxyActive && routed != null && direct != null && routed.ipAddress != direct.ipAddress ->
+            "Low for Chrome/Diagnostics (Proxy active; host OS DNS still uses ISP unless DoH/VPN active)"
+          proxyActive ->
+            "Check Proxy (Routed IP matches direct IP or unreachable)"
+          else ->
+            "Exposed to ISP (No active System VPN or USA Proxy)"
+        }
+
+      val summary =
+        when {
+          routed?.isVerifiedUsa == true && telemetry.vpnActive ->
+            "Full system VPN verified in United States (${routed.ipAddress}). WebRTC guard: ${if (locationConfig.webrtcLeakProtection) "ON" else "OFF"}."
+          routed?.isVerifiedUsa == true && proxyActive ->
+            "Simulator Chrome & Diagnostics verified via USA Proxy (${routed.ipAddress} vs direct ${direct?.ipAddress ?: "--"}). System-wide native apps still need System VPN."
+          telemetry.vpnActive && routed != null ->
+            "System VPN active, but exit IP is in ${routed.countryName} (${routed.countryCode}). Switch VPN server to a US node."
+          else ->
+            "Direct connection active (${routed?.ipAddress ?: "offline"}, ${routed?.countryCode ?: "--"}). Connect a US System VPN or configure a USA Proxy to route IP traffic."
+        }
+
+      LeakCheckReport(
+        directIp = direct?.ipAddress,
+        directCountry = direct?.countryCode,
+        routedIp = routed?.ipAddress,
+        routedCountry = routed?.countryCode,
+        dohResolverReachable = dohOk,
+        webrtcGuardEnabled = locationConfig.webrtcLeakProtection,
+        vpnOrProxyActive = telemetry.vpnActive || proxyActive,
+        dnsLeakRiskLabel = dnsRisk,
+        summary = summary,
+      )
     }
 
   @SuppressLint("MissingPermission")
@@ -286,7 +370,7 @@ class DiagnosticsNetworkService(private val context: Context) {
         permissionGranted = false,
         providerEnabled = providerEnabled,
         coordinatesLabel = null,
-        statusLabel = "Permission not granted (independent of Virtual Region)",
+        statusLabel = "Permission not granted (independent of Virtual Region & Virtual GPS)",
       )
     }
 
@@ -301,14 +385,14 @@ class DiagnosticsNetworkService(private val context: Context) {
         permissionGranted = true,
         providerEnabled = providerEnabled,
         coordinatesLabel = String.format("%.4f, %.4f", lastLoc.latitude, lastLoc.longitude),
-        statusLabel = "Device location permission granted",
+        statusLabel = "Physical location permission granted",
       )
     } else {
       DeviceGeolocationSnapshot(
         permissionGranted = true,
         providerEnabled = providerEnabled,
         coordinatesLabel = null,
-        statusLabel = if (providerEnabled) "Granted (no cached fix yet)" else "Granted (device GPS/Location off)",
+        statusLabel = if (providerEnabled) "Granted (no cached physical fix yet)" else "Granted (device GPS/Location off)",
       )
     }
   }
@@ -345,6 +429,151 @@ class DiagnosticsNetworkService(private val context: Context) {
       totalRamMb = memInfo.totalMem / (1024L * 1024L),
       availRamMb = memInfo.availMem / (1024L * 1024L),
       appStorageUsedKb = (usedBytes / 1024L).coerceAtLeast(1L),
+    )
+  }
+
+  suspend fun runLocationAndNetworkVerification(
+    preferences: DevicePreferences,
+    locationConfig: VirtualLocationConfig,
+    browserGeoProbeResult: String?,
+  ): List<SelfTestItem> {
+    val ipResult = fetchVerifiedPublicIp()
+    val ipReport = ipResult.getOrNull()
+    val dnsResults = runDnsDiagnostics()
+    val httpsResults = runHttpsConnectivityTests()
+    val leakReport = runLeakDiagnostics(locationConfig)
+    val telemetry = readDeviceTelemetry()
+    val proxyState = proxyTunnelController?.state?.value
+    val usaChecks = RegionalFormatter.evaluateUsaRegionVerification(preferences, ipReport)
+    val virtualUsMatches = usaChecks.filter { it.key != "public_ip" }.count { it.isMatchingUsDefault }
+    val validCoords =
+      VirtualLocationCatalog.validateCoordinates(
+        locationConfig.latitude,
+        locationConfig.longitude,
+        locationConfig.accuracyMeters,
+      ).isSuccess
+    val insideUs = VirtualLocationCatalog.isInsideUsGeographicBounds(locationConfig.latitude, locationConfig.longitude)
+
+    return listOf(
+      SelfTestItem(
+        number = 1,
+        title = "Public IP & Country Verification",
+        detail =
+          ipReport?.let {
+            "${it.ipAddress} • ${it.countryName} (${it.countryCode}) • ${it.isp} [${it.routedVia}]"
+          } ?: "Failed: ${ipResult.exceptionOrNull()?.message ?: "No network"}",
+        status =
+          when {
+            ipReport == null -> SelfTestStatus.FAIL
+            ipReport.isVerifiedUsa -> SelfTestStatus.PASS
+            else -> SelfTestStatus.WARN
+          },
+        remediation =
+          when {
+            ipReport == null -> "Verify Wi-Fi/cellular or disconnect a misconfigured proxy."
+            !ipReport.isVerifiedUsa -> "Connect a US VPN server or a verified USA HTTPS/SOCKS5 proxy under the VPN/Proxy tab."
+            else -> ""
+          },
+      ),
+      SelfTestItem(
+        number = 2,
+        title = "VPN / Proxy Routing Status",
+        detail =
+          when {
+            telemetry.vpnActive -> "Android System VPN active (${telemetry.transportLabel})"
+            proxyState?.isConnected == true -> "Proxy ${proxyState.activeEndpointLabel} active (WebView override: ${proxyState.webViewProxyApplied})"
+            proxyState?.status == ProxyTunnelStatus.ERROR -> "Proxy error: ${proxyState.errorMessage}"
+            else -> "No VPN or Proxy active (Direct network)"
+          },
+        status =
+          when {
+            telemetry.vpnActive || (proxyState?.isConnected == true && proxyState.webViewProxyApplied) -> SelfTestStatus.PASS
+            proxyState?.status == ProxyTunnelStatus.ERROR -> SelfTestStatus.FAIL
+            else -> SelfTestStatus.WARN
+          },
+        remediation =
+          if (!telemetry.vpnActive && proxyState?.isConnected != true)
+            "Enable a US VPN in Android VPN Settings or configure a working USA Proxy server."
+          else "",
+      ),
+      SelfTestItem(
+        number = 3,
+        title = "Network, DNS & WebRTC Leak Check",
+        detail = leakReport.dnsLeakRiskLabel,
+        status =
+          when {
+            telemetry.vpnActive && leakReport.dohResolverReachable -> SelfTestStatus.PASS
+            proxyState?.isConnected == true && leakReport.directIp != leakReport.routedIp -> SelfTestStatus.PASS
+            else -> SelfTestStatus.WARN
+          },
+        remediation =
+          if (!telemetry.vpnActive) "For system-wide DNS & native app leak protection, use an Android System VPN." else "",
+      ),
+      SelfTestItem(
+        number = 4,
+        title = "Virtual GPS Coordinates & Bounds",
+        detail =
+          if (locationConfig.enabled)
+            "${locationConfig.displayLabel} (${locationConfig.formattedCoordinates}, ±${locationConfig.accuracyMeters.toInt()}m)"
+          else "Virtual GPS disabled",
+        status =
+          when {
+            !locationConfig.enabled -> SelfTestStatus.WARN
+            validCoords && insideUs -> SelfTestStatus.PASS
+            validCoords -> SelfTestStatus.WARN
+            else -> SelfTestStatus.FAIL
+          },
+        remediation =
+          if (!locationConfig.enabled) "Enable Virtual GPS in the Virtual GPS tab."
+          else if (!insideUs) "Coordinates are outside US geographic bounds; pick a US preset if you want a US location."
+          else "",
+      ),
+      SelfTestItem(
+        number = 5,
+        title = "Browser Geolocation Permission",
+        detail = "Mode: ${locationConfig.browserPermission.label} • WebRTC Guard: ${if (locationConfig.webrtcLeakProtection) "ON" else "OFF"}",
+        status =
+          when (locationConfig.browserPermission.name) {
+            "BLOCK" -> SelfTestStatus.WARN
+            else -> SelfTestStatus.PASS
+          },
+        remediation =
+          if (locationConfig.browserPermission.name == "BLOCK")
+            "Switch Geolocation Permission to Auto-Allow or Prompt Per Site so websites can receive Virtual GPS."
+          else "",
+      ),
+      SelfTestItem(
+        number = 6,
+        title = "Simulator Browser Geolocation Probe",
+        detail = browserGeoProbeResult ?: "Run live WebView probe to verify navigator.geolocation output",
+        status =
+          when {
+            browserGeoProbeResult == null -> SelfTestStatus.WARN
+            browserGeoProbeResult.startsWith("PASS") -> SelfTestStatus.PASS
+            else -> SelfTestStatus.FAIL
+          },
+        remediation =
+          if (browserGeoProbeResult == null) "Tap 'Test Browser GPS' below or open Chrome to initialize WebView."
+          else if (!browserGeoProbeResult.startsWith("PASS")) "Ensure Virtual GPS is enabled and permission is not set to Block."
+          else "",
+      ),
+      SelfTestItem(
+        number = 7,
+        title = "USA Device Region Defaults",
+        detail = "${preferences.countryCode}/${preferences.localeTag} • ${preferences.usTimezoneId} ($virtualUsMatches/6 US defaults)",
+        status = if (virtualUsMatches == 6) SelfTestStatus.PASS else SelfTestStatus.WARN,
+        remediation = if (virtualUsMatches < 6) "Use 'US Reset' in Settings -> Device Region Settings to restore all 6 US defaults." else "",
+      ),
+      SelfTestItem(
+        number = 8,
+        title = "DNS & HTTPS TLS Reachability",
+        detail = "${dnsResults.count { it.success }}/${dnsResults.size} DNS • ${httpsResults.count { it.success }}/${httpsResults.size} HTTPS",
+        status =
+          if (dnsResults.all { it.success } && httpsResults.all { it.success }) SelfTestStatus.PASS
+          else SelfTestStatus.FAIL,
+        remediation =
+          if (!httpsResults.all { it.success }) "Verify network connectivity or proxy endpoint settings." else "",
+      ),
     )
   }
 

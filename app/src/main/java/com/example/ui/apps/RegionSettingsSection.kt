@@ -1,8 +1,10 @@
 package com.example.ui.apps
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -232,12 +234,30 @@ fun DeviceRegionSettingsSection(
         )
       }
 
-      OutlinedButton(
-        onClick = onOpenDiagnostics,
+      val ctx = LocalContext.current
+      Row(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        Text("Verify USA Region & Public IP in Diagnostics")
+        OutlinedButton(
+          onClick = onOpenDiagnostics,
+          modifier = Modifier.weight(1f),
+          shape = RoundedCornerShape(16.dp),
+        ) {
+          Text("Verify Region & IP", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        OutlinedButton(
+          onClick = {
+            runCatching { ctx.startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) }
+              .onFailure {
+                runCatching { ctx.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS)) }
+              }
+          },
+          modifier = Modifier.weight(1f),
+          shape = RoundedCornerShape(16.dp),
+        ) {
+          Text("Android VPN", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
       }
     }
   }

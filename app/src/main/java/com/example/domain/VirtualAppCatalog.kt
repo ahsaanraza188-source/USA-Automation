@@ -246,14 +246,14 @@ object VirtualAppCatalog {
       ),
       VirtualAppSpec(
         appId = VirtualAppId.DIAGNOSTICS,
-        title = "Diagnostics",
-        subtitle = "Live public IP check & 15-point self-test",
+        title = "Net & GPS",
+        subtitle = "USA VPN/Proxy, Virtual GPS & verification",
         category = AppCategory.SYSTEM,
         icon = Icons.Rounded.MonitorHeart,
-        version = "2.4",
+        version = "3.0",
         rating = "5.0",
         sizeLabel = "System Core",
-        permissionsSummary = "Internet, Network State",
+        permissionsSummary = "Internet, Network State, WebView Proxy",
         accentIndex = 3,
       ),
       VirtualAppSpec(

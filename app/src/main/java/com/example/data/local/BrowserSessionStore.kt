@@ -213,10 +213,12 @@ class BrowserSessionStore(private val context: Context) {
 
     fun defaultBookmarks(): List<BrowserBookmark> =
       listOf(
+        BrowserBookmark("Check IP", "https://ipinfo.io/"),
+        BrowserBookmark("Test GPS", "https://browserleaks.com/geo"),
+        BrowserBookmark("Leak Test", "https://ipleak.net/"),
         BrowserBookmark("Gmail", "https://mail.google.com/"),
         BrowserBookmark("Google", "https://www.google.com/"),
         BrowserBookmark("YouTube", "https://m.youtube.com/"),
-        BrowserBookmark("Wikipedia US", "https://en.wikipedia.org/wiki/United_States"),
         BrowserBookmark("Weather.gov", "https://www.weather.gov/"),
         BrowserBookmark("USA.gov", "https://www.usa.gov/"),
       )

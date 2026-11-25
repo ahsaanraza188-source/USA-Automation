@@ -86,20 +86,30 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.VirtualContact
 import com.example.data.model.VirtualFileRecord
 import com.example.data.model.VirtualNote
+import com.example.data.network.ProxyTunnelRuntimeState
+import com.example.data.network.PublicIpReport
 import com.example.domain.AppCategory
 import com.example.domain.VirtualAppCatalog
 import com.example.domain.VirtualAppId
 import com.example.domain.VirtualAppSpec
+import com.example.domain.VirtualLocationCatalog
+import com.example.domain.VirtualLocationConfig
+import com.example.domain.VirtualLocationMode
 import com.example.ui.shell.GoogleServicesUiState
 import com.example.ui.shell.UiState
+import com.example.ui.theme.OsTheme
 import java.net.URLEncoder
 
-// --- 9. CHROME BROWSER APP (100% Persistent Cookies, Storage, Tabs & Cloud Sync) ---
+// --- 9. CHROME BROWSER APP (100% Persistent Cookies, Storage, Tabs, Proxy & Virtual GPS) ---
 @Composable
 fun ChromeBrowserApp(
   sessionManager: BrowserSessionManager,
   isActive: Boolean,
   initialUrl: String?,
+  ipReport: PublicIpReport? = null,
+  locationConfig: VirtualLocationConfig = VirtualLocationConfig(),
+  proxyRuntime: ProxyTunnelRuntimeState? = null,
+  onOpenVpnDiagnostics: () -> Unit = {},
   onConsumeInitialUrl: () -> Unit,
   onCloseApp: () -> Unit,
 ) {
@@ -293,17 +303,109 @@ fun ChromeBrowserApp(
         }
       }
 
-      // Quick Bookmarks (Gmail, Google, YouTube, US portals + user saved bookmarks)
+      // Quick Bookmarks + Real IP / VPN / Virtual GPS indicators
       LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        items(browserState.bookmarks, key = { it.url }) { bookmark ->
+        item {
+          FilterChip(
+            selected = ipReport?.isVerifiedUsa == true || proxyRuntime?.isConnected == true,
+            onClick = onOpenVpnDiagnostics,
+            label = {
+              Text(
+                text =
+                  when {
+                    ipReport?.isVerifiedUsa == true -> "USA IP Active (${ipReport.ipAddress})"
+                    proxyRuntime?.isConnected == true -> "Proxy (${proxyRuntime.activeEndpointLabel})"
+                    ipReport != null -> "IP: ${ipReport.countryCode} • Setup US VPN"
+                    else -> "Setup US VPN"
+                  },
+                maxLines = 1,
+                color =
+                  if (ipReport?.isVerifiedUsa == true) OsTheme.extended.verifiedEmerald
+                  else MaterialTheme.colorScheme.onSurface,
+              )
+            },
+          )
+        }
+        item {
+          FilterChip(
+            selected = locationConfig.enabled && locationConfig.mode == VirtualLocationMode.VIRTUAL_GPS,
+            onClick = onOpenVpnDiagnostics,
+            leadingIcon = {
+              Icon(Icons.Rounded.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
+            },
+            label = {
+              Text(
+                text =
+                  if (locationConfig.enabled && locationConfig.mode == VirtualLocationMode.VIRTUAL_GPS)
+                    "GPS: ${locationConfig.city}, ${locationConfig.stateCode}"
+                  else "GPS: ${locationConfig.mode.label}",
+                maxLines = 1,
+              )
+            },
+          )
+        }
+        item {
+          FilterChip(
+            selected = activeTab.url.contains("ipinfo.io", ignoreCase = true),
+            onClick = { sessionManager.openOrNavigate("https://ipinfo.io/") },
+            label = { Text("Check IP") },
+          )
+        }
+        item {
+          FilterChip(
+            selected = activeTab.url.contains("browserleaks.com/geo", ignoreCase = true),
+            onClick = { sessionManager.openOrNavigate("https://browserleaks.com/geo") },
+            label = { Text("Test GPS") },
+          )
+        }
+        items(
+          browserState.bookmarks.filterNot {
+            it.url == "https://ipinfo.io/" || it.url == "https://browserleaks.com/geo"
+          },
+          key = { it.url },
+        ) { bookmark ->
           FilterChip(
             selected = activeTab.url.startsWith(bookmark.url, ignoreCase = true),
             onClick = { sessionManager.openOrNavigate(bookmark.url) },
             label = { Text(bookmark.title, maxLines = 1) },
           )
+        }
+      }
+
+      // Interactive Browser Geolocation Permission Bar (ASK mode)
+      browserState.pendingGeoPromptOrigin?.let { origin ->
+        Surface(
+          color = MaterialTheme.colorScheme.secondaryContainer,
+          modifier = Modifier.fillMaxWidth().testTag("chrome_geo_prompt_bar"),
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "$origin requests location",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = "Virtual GPS: ${locationConfig.city}, ${locationConfig.stateCode} (${locationConfig.formattedCoordinates})",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+              )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+              TextButton(onClick = { sessionManager.respondToPendingGeoPrompt(false) }) { Text("Block") }
+              Button(onClick = { sessionManager.respondToPendingGeoPrompt(true) }) { Text("Allow") }
+            }
+          }
         }
       }
 
@@ -609,19 +711,30 @@ fun SearchApp(
   }
 }
 
-// --- 11. MAPS APP (OpenStreetMap + Nominatim + Optional Coarse Location) ---
+// --- 11. MAPS APP (OpenStreetMap + Nominatim + Virtual GPS / Physical Location) ---
 @SuppressLint("SetJavaScriptEnabled", "MissingPermission")
 @Composable
 fun MapsApp(
   googleState: GoogleServicesUiState,
+  locationConfig: VirtualLocationConfig = VirtualLocationConfig(),
   onSearchPlaces: (String) -> Unit,
   onCloseApp: () -> Unit,
 ) {
   val context = LocalContext.current
   var query by remember { mutableStateOf("") }
-  var centerLat by remember { mutableStateOf(40.7128) }
-  var centerLon by remember { mutableStateOf(-74.0060) }
-  var centerLabel by remember { mutableStateOf("New York, NY") }
+  val isVirtualActive = locationConfig.enabled && locationConfig.mode == VirtualLocationMode.VIRTUAL_GPS
+  var centerLat by remember(locationConfig.latitude, isVirtualActive) {
+    mutableStateOf(if (isVirtualActive) locationConfig.latitude else 40.7128)
+  }
+  var centerLon by remember(locationConfig.longitude, isVirtualActive) {
+    mutableStateOf(if (isVirtualActive) locationConfig.longitude else -74.0060)
+  }
+  var centerLabel by remember(locationConfig.city, locationConfig.stateCode, isVirtualActive) {
+    mutableStateOf(
+      if (isVirtualActive) "Virtual GPS: ${locationConfig.city}, ${locationConfig.stateCode}"
+      else "New York, NY"
+    )
+  }
   var locationMessage by remember { mutableStateOf<String?>(null) }
 
   val locationLauncher =
@@ -634,7 +747,7 @@ fun MapsApp(
         if (loc != null) {
           centerLat = loc.latitude
           centerLon = loc.longitude
-          centerLabel = "Device Location"
+          centerLabel = "Physical Device Location"
           locationMessage = null
         } else {
           locationMessage = "Device location unavailable right now; showing $centerLabel"
@@ -644,23 +757,19 @@ fun MapsApp(
       }
     }
 
-  val usCities =
-    remember {
-      listOf(
-        Triple("New York", 40.7128, -74.0060),
-        Triple("San Francisco", 37.7749, -122.4194),
-        Triple("Austin", 30.2672, -97.7431),
-        Triple("Chicago", 41.8781, -87.6298),
-        Triple("Miami", 25.7617, -80.1918),
-      )
-    }
+  val usCities = remember { VirtualLocationCatalog.presets }
 
   Scaffold(
     topBar = {
       VirtualAppTopBar("Maps", centerLabel, onBack = onCloseApp) {
         IconButton(
           onClick = {
-            if (
+            if (isVirtualActive) {
+              centerLat = locationConfig.latitude
+              centerLon = locationConfig.longitude
+              centerLabel = "Virtual GPS: ${locationConfig.city}, ${locationConfig.stateCode}"
+              locationMessage = "Centered on active Virtual GPS (${locationConfig.formattedCoordinates})"
+            } else if (
               ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
             ) {
@@ -671,16 +780,16 @@ fun MapsApp(
               if (loc != null) {
                 centerLat = loc.latitude
                 centerLon = loc.longitude
-                centerLabel = "Device Location"
+                centerLabel = "Physical Device Location"
               } else {
-                locationMessage = "No cached device fix; pick a US city or search."
+                locationMessage = "No cached physical fix; pick a US city or enable Virtual GPS."
               }
             } else {
               locationLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
             }
           }
         ) {
-          Icon(Icons.Rounded.MyLocation, contentDescription = "My location")
+          Icon(Icons.Rounded.MyLocation, contentDescription = "Center on active location")
         }
       }
     }
@@ -709,15 +818,15 @@ fun MapsApp(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        items(usCities) { (city, lat, lon) ->
+        items(usCities, key = { it.id }) { preset ->
           FilterChip(
-            selected = centerLabel == city,
+            selected = centerLabel.contains(preset.city),
             onClick = {
-              centerLat = lat
-              centerLon = lon
-              centerLabel = city
+              centerLat = preset.latitude
+              centerLon = preset.longitude
+              centerLabel = preset.displayName
             },
-            label = { Text(city) },
+            label = { Text(preset.shortLabel) },
           )
         }
       }

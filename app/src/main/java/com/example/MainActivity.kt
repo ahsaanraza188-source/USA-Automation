@@ -53,9 +53,11 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.local.LocalVirtualOsDataSource
 import com.example.data.local.OAuthTokenStore
+import com.example.data.local.SecureNetworkConfigStore
 import com.example.data.network.DiagnosticsNetworkService
 import com.example.data.network.GoogleApisClient
 import com.example.data.network.GoogleOAuthManager
+import com.example.data.network.ProxyTunnelController
 import com.example.data.repository.VirtualOsDataSource
 import com.example.data.repository.VirtualOsRepository
 import com.example.domain.VirtualAppId
@@ -284,13 +286,16 @@ fun VirtualOsRoot(
   val lifecycleOwner = LocalLifecycleOwner.current
   val saveableStateHolder = rememberSaveableStateHolder()
 
+  val proxyController = remember(appContext) { ProxyTunnelController(appContext) }
+  val networkConfigStore = remember(appContext) { SecureNetworkConfigStore(appContext) }
+
   val browserSessionManager: BrowserSessionManager =
     viewModel(
       key = "browser_${currentUserId}_$isCloudSignedIn",
       factory =
         viewModelFactory {
           initializer {
-            BrowserSessionManager(appContext, currentUserId, dataSource)
+            BrowserSessionManager(appContext, currentUserId, dataSource, proxyController)
           }
         },
     )
@@ -324,7 +329,13 @@ fun VirtualOsRoot(
       key = "diag_$currentUserId",
       factory =
         viewModelFactory {
-          initializer { DiagnosticsViewModel(DiagnosticsNetworkService(appContext)) }
+          initializer {
+            DiagnosticsViewModel(
+              service = DiagnosticsNetworkService(appContext, proxyController),
+              configStore = networkConfigStore,
+              proxyController = proxyController,
+            )
+          }
         },
     )
 
@@ -352,8 +363,16 @@ fun VirtualOsRoot(
 
   val diagState by diagnosticsViewModel.uiState.collectAsStateWithLifecycle()
   val diagLogs by diagnosticsViewModel.logs.collectAsStateWithLifecycle()
+  val locationConfig by diagnosticsViewModel.locationConfig.collectAsStateWithLifecycle()
+  val customLocations by diagnosticsViewModel.customLocations.collectAsStateWithLifecycle()
+  val vpnProxyConfig by diagnosticsViewModel.vpnProxyConfig.collectAsStateWithLifecycle()
+  val proxyRuntime by diagnosticsViewModel.proxyRuntimeState.collectAsStateWithLifecycle()
   val tokenState by googleServicesViewModel.tokenState.collectAsStateWithLifecycle()
   val googleState by googleServicesViewModel.uiState.collectAsStateWithLifecycle()
+
+  LaunchedEffect(locationConfig) {
+    browserSessionManager.updateVirtualLocationConfig(locationConfig)
+  }
 
   val paletteKey =
     remember(preferences.themePalette) {
@@ -477,6 +496,10 @@ fun VirtualOsRoot(
                   sessionManager = browserSessionManager,
                   isActive = isChromeActive,
                   initialUrl = shellState.pendingBrowserUrl,
+                  ipReport = diagState.ipReport,
+                  locationConfig = locationConfig,
+                  proxyRuntime = proxyRuntime,
+                  onOpenVpnDiagnostics = { shellViewModel.launchApp(VirtualAppId.DIAGNOSTICS) },
                   onConsumeInitialUrl = { shellViewModel.consumePendingBrowserUrl() },
                   onCloseApp = shellViewModel::goHome,
                 )
@@ -561,6 +584,7 @@ fun VirtualOsRoot(
                 VirtualAppId.MAPS ->
                   MapsApp(
                     googleState = googleState,
+                    locationConfig = locationConfig,
                     onSearchPlaces = googleServicesViewModel::searchUsPlaces,
                     onCloseApp = shellViewModel::goHome,
                   )
@@ -646,8 +670,36 @@ fun VirtualOsRoot(
                     diagState = diagState,
                     logs = diagLogs,
                     preferences = preferences,
+                    locationConfig = locationConfig,
+                    customLocations = customLocations,
+                    vpnProxyConfig = vpnProxyConfig,
+                    proxyRuntime = proxyRuntime,
                     onRefreshIp = diagnosticsViewModel::refreshNetworkDiagnostics,
                     onRefreshGeolocation = diagnosticsViewModel::refreshGeolocationAndTelemetry,
+                    onToggleVirtualLocation = diagnosticsViewModel::toggleVirtualLocation,
+                    onSelectLocationMode = diagnosticsViewModel::setLocationMode,
+                    onSelectLocationPreset = diagnosticsViewModel::selectLocationPreset,
+                    onApplyManualCoordinates = diagnosticsViewModel::applyManualCoordinates,
+                    onAddCustomLocation = diagnosticsViewModel::addCustomLocationPreset,
+                    onDeleteCustomLocation = diagnosticsViewModel::deleteCustomLocationPreset,
+                    onSelectBrowserGeoPermission = diagnosticsViewModel::setBrowserGeoPermission,
+                    onToggleWebrtcGuard = diagnosticsViewModel::setWebrtcLeakProtection,
+                    onSelectVpnMode = diagnosticsViewModel::setVpnConnectionMode,
+                    onSelectGateway = diagnosticsViewModel::selectGatewayRegion,
+                    onConnectProxy = diagnosticsViewModel::connectProxyServer,
+                    onDisconnectProxy = diagnosticsViewModel::disconnectProxyServer,
+                    onRunFullVerification = {
+                      diagnosticsViewModel.runFullVerificationSuite(
+                        preferences = preferences,
+                        probeRunner = browserSessionManager::runGeolocationVerificationProbe,
+                      )
+                    },
+                    onRunBrowserGeoProbe = {
+                      diagnosticsViewModel.runBrowserGeoProbeOnly(
+                        browserSessionManager::runGeolocationVerificationProbe
+                      )
+                    },
+                    onRunLeakCheck = diagnosticsViewModel::runLeakCheck,
                     onRunFifteenTests = { hasCam ->
                       diagnosticsViewModel.runFifteenTests(
                         preferences = preferences,
@@ -659,6 +711,7 @@ fun VirtualOsRoot(
                       )
                     },
                     onOpenSettings = { shellViewModel.launchApp(VirtualAppId.SETTINGS) },
+                    onOpenUrlInChrome = shellViewModel::openUrlInChrome,
                     onClearLogs = diagnosticsViewModel::clearLogs,
                     onCloseApp = shellViewModel::goHome,
                   )

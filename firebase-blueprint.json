@@ -1,0 +1,201 @@
+{
+  "entities": {
+    "VirtualNote": {
+      "title": "VirtualNote",
+      "description": "User-owned note or checklist synced across the virtual OS.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "title": { "type": "string", "description": "Note title." },
+        "content": { "type": "string", "description": "Note body or checklist lines." },
+        "colorKey": {
+          "type": "string",
+          "enum": ["COBALT", "SAGE", "AMBER", "ROSE", "NEUTRAL"],
+          "description": "Card accent color token."
+        },
+        "isPinned": { "type": "boolean", "description": "Whether the note is pinned." },
+        "isChecklist": { "type": "boolean", "description": "Whether lines render as a checklist." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "title", "content", "colorKey", "isPinned", "isChecklist", "createdAt", "updatedAt"]
+    },
+    "VirtualContact": {
+      "title": "VirtualContact",
+      "description": "Address book contact synced to the user account.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "name": { "type": "string", "description": "Contact display name." },
+        "phone": { "type": "string", "description": "Phone number." },
+        "email": { "type": "string", "description": "Email address." },
+        "company": { "type": "string", "description": "Organization or label." },
+        "isFavorite": { "type": "boolean", "description": "Starred favorite flag." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "name", "phone", "email", "company", "isFavorite", "createdAt", "updatedAt"]
+    },
+    "MessageThread": {
+      "title": "MessageThread",
+      "description": "Conversation thread in the Messages virtual app.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "contactName": { "type": "string", "description": "Participant display name." },
+        "contactPhone": { "type": "string", "description": "Participant phone number." },
+        "lastMessage": { "type": "string", "description": "Preview of most recent message." },
+        "unreadCount": { "type": "integer", "description": "Unread message counter." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "contactName", "contactPhone", "lastMessage", "unreadCount", "createdAt", "updatedAt"]
+    },
+    "VirtualMessage": {
+      "title": "VirtualMessage",
+      "description": "Individual message inside a conversation thread.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "threadId": { "type": "string", "description": "Parent thread document ID." },
+        "sender": { "type": "string", "description": "Sender label." },
+        "body": { "type": "string", "description": "Message text content." },
+        "isOutgoing": { "type": "boolean", "description": "True if sent by the device user." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "threadId", "sender", "body", "isOutgoing", "createdAt", "updatedAt"]
+    },
+    "CalendarEvent": {
+      "title": "CalendarEvent",
+      "description": "Calendar event displayed in Calendar and Home At-a-Glance.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "title": { "type": "string", "description": "Event title." },
+        "description": { "type": "string", "description": "Event notes." },
+        "dateEpochMillis": { "type": "integer", "description": "Event date in UTC epoch millis." },
+        "timeLabel": { "type": "string", "description": "Formatted time label e.g. 09:30 AM." },
+        "location": { "type": "string", "description": "Event location." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "title", "description", "dateEpochMillis", "timeLabel", "location", "createdAt", "updatedAt"]
+    },
+    "VirtualAlarm": {
+      "title": "VirtualAlarm",
+      "description": "Alarm entry stored for the Clock app.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "hour": { "type": "integer", "description": "Hour 0-23." },
+        "minute": { "type": "integer", "description": "Minute 0-59." },
+        "label": { "type": "string", "description": "Alarm label." },
+        "isEnabled": { "type": "boolean", "description": "Whether alarm is active." },
+        "daysMask": { "type": "integer", "description": "Bitmask of repeating days." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "hour", "minute", "label", "isEnabled", "daysMask", "createdAt", "updatedAt"]
+    },
+    "VirtualFileRecord": {
+      "title": "VirtualFileRecord",
+      "description": "File metadata index for the Files virtual manager.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "name": { "type": "string", "description": "File name with extension." },
+        "folder": {
+          "type": "string",
+          "enum": ["Documents", "Downloads", "Pictures", "System"],
+          "description": "Virtual folder category."
+        },
+        "mimeType": { "type": "string", "description": "MIME type." },
+        "sizeBytes": { "type": "integer", "description": "File size in bytes." },
+        "localPath": { "type": "string", "description": "App-private file URI or path." },
+        "contentPreview": { "type": "string", "description": "Text preview for text documents." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "name", "folder", "mimeType", "sizeBytes", "localPath", "contentPreview", "createdAt", "updatedAt"]
+    },
+    "DevicePreferences": {
+      "title": "DevicePreferences",
+      "description": "Virtual OS visual theme, US timezone, pinned apps, and OAuth Client ID.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "themePalette": {
+          "type": "string",
+          "enum": ["COBALT", "MEADOW", "TERRACOTTA", "AMETHYST"],
+          "description": "Material You seed palette."
+        },
+        "darkMode": { "type": "boolean", "description": "Dark mode preference." },
+        "usTimezoneId": {
+          "type": "string",
+          "enum": ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"],
+          "description": "Virtual US timezone ID."
+        },
+        "oauthClientId": { "type": "string", "description": "User-supplied Google Cloud OAuth Client ID." },
+        "pinnedAppIds": { "type": "array", "description": "Pinned Home Screen app IDs." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "themePalette", "darkMode", "usTimezoneId", "oauthClientId", "pinnedAppIds", "createdAt", "updatedAt"]
+    },
+    "BrowserVault": {
+      "title": "BrowserVault",
+      "description": "Cloud-synced Chrome tabs, bookmarks, cookies, and web storage snapshot for persistent sessions across emulator/browser restarts.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "tabsJson": { "type": "string", "description": "Serialized JSON array of open tabs." },
+        "activeTabIndex": { "type": "integer", "description": "Index of active browser tab." },
+        "bookmarksJson": { "type": "string", "description": "Serialized JSON array of bookmarks." },
+        "cookiesJson": { "type": "string", "description": "Serialized JSON map of origin URLs to cookie headers." },
+        "webStorageJson": { "type": "string", "description": "Serialized JSON map of origins to localStorage entries." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "tabsJson", "activeTabIndex", "bookmarksJson", "cookiesJson", "webStorageJson", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/VirtualNote" },
+      "description": "User-owned Notes documents."
+    },
+    "/users/{userId}/contacts/{contactId}": {
+      "schema": { "$ref": "#/entities/VirtualContact" },
+      "description": "User-owned Contacts documents."
+    },
+    "/users/{userId}/threads/{threadId}": {
+      "schema": { "$ref": "#/entities/MessageThread" },
+      "description": "User-owned Messages threads."
+    },
+    "/users/{userId}/threads/{threadId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/VirtualMessage" },
+      "description": "Messages belonging to a user's thread."
+    },
+    "/users/{userId}/events/{eventId}": {
+      "schema": { "$ref": "#/entities/CalendarEvent" },
+      "description": "User-owned Calendar events."
+    },
+    "/users/{userId}/alarms/{alarmId}": {
+      "schema": { "$ref": "#/entities/VirtualAlarm" },
+      "description": "User-owned Clock alarms."
+    },
+    "/users/{userId}/files/{fileId}": {
+      "schema": { "$ref": "#/entities/VirtualFileRecord" },
+      "description": "User-owned virtual file metadata records."
+    },
+    "/users/{userId}/preferences/{prefId}": {
+      "schema": { "$ref": "#/entities/DevicePreferences" },
+      "description": "User-owned Virtual OS preferences."
+    },
+    "/users/{userId}/browser_vault/{vaultId}": {
+      "schema": { "$ref": "#/entities/BrowserVault" },
+      "description": "User-owned cloud-synced Chrome session vault."
+    }
+  }
+}

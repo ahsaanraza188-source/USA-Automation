@@ -1,0 +1,6 @@
+{
+  "name": "USA Virtual Android Pro",
+  "description": "Pixel Material You virtual Android smartphone shell with 16 working apps, Firebase cloud sync, OAuth 2.0 PKCE for Gmail and YouTube, and real-time public IP diagnostics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

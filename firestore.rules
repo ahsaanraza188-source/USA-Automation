@@ -1,0 +1,265 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function hasValidTimestamps(data) {
+      return data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidNote(data, userId) {
+      return data.userId == userId &&
+             data.title is string && data.title.size() <= 200 &&
+             data.content is string && data.content.size() <= 10000 &&
+             data.colorKey in ['COBALT', 'SAGE', 'AMBER', 'ROSE', 'NEUTRAL'] &&
+             data.isPinned is bool &&
+             data.isChecklist is bool &&
+             hasValidTimestamps(data);
+    }
+
+    function isValidContact(data, userId) {
+      return data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+             data.phone is string && data.phone.size() <= 40 &&
+             data.email is string && data.email.size() <= 120 &&
+             data.company is string && data.company.size() <= 120 &&
+             data.isFavorite is bool &&
+             hasValidTimestamps(data);
+    }
+
+    function isValidThread(data, userId) {
+      return data.userId == userId &&
+             data.contactName is string && data.contactName.size() >= 1 && data.contactName.size() <= 120 &&
+             data.contactPhone is string && data.contactPhone.size() <= 40 &&
+             data.lastMessage is string && data.lastMessage.size() <= 500 &&
+             data.unreadCount is int && data.unreadCount >= 0 && data.unreadCount <= 10000 &&
+             hasValidTimestamps(data);
+    }
+
+    function isValidMessage(data, userId, threadId) {
+      return data.userId == userId &&
+             data.threadId == threadId &&
+             data.sender is string && data.sender.size() >= 1 && data.sender.size() <= 120 &&
+             data.body is string && data.body.size() >= 1 && data.body.size() <= 2000 &&
+             data.isOutgoing is bool &&
+             hasValidTimestamps(data);
+    }
+
+    function isValidEvent(data, userId) {
+      return data.userId == userId &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+             data.description is string && data.description.size() <= 2000 &&
+             data.dateEpochMillis is int && data.dateEpochMillis >= 0 &&
+             data.timeLabel is string && data.timeLabel.size() <= 40 &&
+             data.location is string && data.location.size() <= 200 &&
+             hasValidTimestamps(data);
+    }
+
+    function isValidAlarm(data, userId) {
+      return data.userId == userId &&
+             data.hour is int && data.hour >= 0 && data.hour <= 23 &&
+             data.minute is int && data.minute >= 0 && data.minute <= 59 &&
+             data.label is string && data.label.size() <= 80 &&
+             data.isEnabled is bool &&
+             data.daysMask is int && data.daysMask >= 0 && data.daysMask <= 127 &&
+             hasValidTimestamps(data);
+    }
+
+    function isValidFile(data, userId) {
+      return data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+             data.folder in ['Documents', 'Downloads', 'Pictures', 'System'] &&
+             data.mimeType is string && data.mimeType.size() <= 100 &&
+             data.sizeBytes is int && data.sizeBytes >= 0 &&
+             data.localPath is string && data.localPath.size() <= 500 &&
+             data.contentPreview is string && data.contentPreview.size() <= 4000 &&
+             hasValidTimestamps(data);
+    }
+
+    function isValidPreferences(data, userId) {
+      return data.userId == userId &&
+             data.themePalette in ['COBALT', 'MEADOW', 'TERRACOTTA', 'AMETHYST'] &&
+             data.darkMode is bool &&
+             data.usTimezoneId in ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles'] &&
+             data.oauthClientId is string && data.oauthClientId.size() <= 200 &&
+             data.pinnedAppIds is list && data.pinnedAppIds.size() <= 20 &&
+             (data.pinnedAppIds.size() == 0 || data.pinnedAppIds[0] is string) &&
+             hasValidTimestamps(data);
+    }
+
+    function isValidBrowserVault(data, userId) {
+      return data.userId == userId &&
+             data.tabsJson is string && data.tabsJson.size() <= 32000 &&
+             data.activeTabIndex is int && data.activeTabIndex >= 0 && data.activeTabIndex <= 50 &&
+             data.bookmarksJson is string && data.bookmarksJson.size() <= 16000 &&
+             data.cookiesJson is string && data.cookiesJson.size() <= 200000 &&
+             data.webStorageJson is string && data.webStorageJson.size() <= 200000 &&
+             hasValidTimestamps(data);
+    }
+
+    match /users/{userId} {
+      match /notes/{noteId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(noteId);
+        allow create: if isOwner(userId) && isValidId(noteId) &&
+                         incoming().keys().hasAll(['userId', 'title', 'content', 'colorKey', 'isPinned', 'isChecklist', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'title', 'content', 'colorKey', 'isPinned', 'isChecklist', 'createdAt', 'updatedAt']) &&
+                         isValidNote(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(noteId) &&
+                         isValidNote(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'content', 'colorKey', 'isPinned', 'isChecklist', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(noteId);
+      }
+
+      match /contacts/{contactId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(contactId);
+        allow create: if isOwner(userId) && isValidId(contactId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'phone', 'email', 'company', 'isFavorite', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'phone', 'email', 'company', 'isFavorite', 'createdAt', 'updatedAt']) &&
+                         isValidContact(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(contactId) &&
+                         isValidContact(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'email', 'company', 'isFavorite', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(contactId);
+      }
+
+      match /threads/{threadId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(threadId);
+        allow create: if isOwner(userId) && isValidId(threadId) &&
+                         incoming().keys().hasAll(['userId', 'contactName', 'contactPhone', 'lastMessage', 'unreadCount', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'contactName', 'contactPhone', 'lastMessage', 'unreadCount', 'createdAt', 'updatedAt']) &&
+                         isValidThread(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(threadId) &&
+                         isValidThread(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['contactName', 'contactPhone', 'lastMessage', 'unreadCount', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(threadId);
+
+        match /messages/{messageId} {
+          allow list: if isOwner(userId) && isValidId(threadId);
+          allow get: if isOwner(userId) && isValidId(threadId) && isValidId(messageId);
+          allow create: if isOwner(userId) && isValidId(threadId) && isValidId(messageId) &&
+                           exists(/databases/$(database)/documents/users/$(userId)/threads/$(threadId)) &&
+                           incoming().keys().hasAll(['userId', 'threadId', 'sender', 'body', 'isOutgoing', 'createdAt', 'updatedAt']) &&
+                           incoming().keys().hasOnly(['userId', 'threadId', 'sender', 'body', 'isOutgoing', 'createdAt', 'updatedAt']) &&
+                           isValidMessage(incoming(), userId, threadId);
+          allow update: if isOwner(userId) && isValidId(threadId) && isValidId(messageId) &&
+                           isValidMessage(incoming(), userId, threadId) &&
+                           incoming().userId == existing().userId &&
+                           incoming().threadId == existing().threadId &&
+                           incoming().createdAt == existing().createdAt &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['body', 'updatedAt']);
+          allow delete: if isOwner(userId) && isValidId(threadId) && isValidId(messageId);
+        }
+      }
+
+      match /events/{eventId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(eventId);
+        allow create: if isOwner(userId) && isValidId(eventId) &&
+                         incoming().keys().hasAll(['userId', 'title', 'description', 'dateEpochMillis', 'timeLabel', 'location', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'title', 'description', 'dateEpochMillis', 'timeLabel', 'location', 'createdAt', 'updatedAt']) &&
+                         isValidEvent(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(eventId) &&
+                         isValidEvent(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'dateEpochMillis', 'timeLabel', 'location', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(eventId);
+      }
+
+      match /alarms/{alarmId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(alarmId);
+        allow create: if isOwner(userId) && isValidId(alarmId) &&
+                         incoming().keys().hasAll(['userId', 'hour', 'minute', 'label', 'isEnabled', 'daysMask', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'hour', 'minute', 'label', 'isEnabled', 'daysMask', 'createdAt', 'updatedAt']) &&
+                         isValidAlarm(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(alarmId) &&
+                         isValidAlarm(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['hour', 'minute', 'label', 'isEnabled', 'daysMask', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(alarmId);
+      }
+
+      match /files/{fileId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(fileId);
+        allow create: if isOwner(userId) && isValidId(fileId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'folder', 'mimeType', 'sizeBytes', 'localPath', 'contentPreview', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'folder', 'mimeType', 'sizeBytes', 'localPath', 'contentPreview', 'createdAt', 'updatedAt']) &&
+                         isValidFile(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(fileId) &&
+                         isValidFile(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'folder', 'mimeType', 'sizeBytes', 'localPath', 'contentPreview', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(fileId);
+      }
+
+      match /preferences/{prefId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(prefId);
+        allow create: if isOwner(userId) && isValidId(prefId) &&
+                         incoming().keys().hasAll(['userId', 'themePalette', 'darkMode', 'usTimezoneId', 'oauthClientId', 'pinnedAppIds', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'themePalette', 'darkMode', 'usTimezoneId', 'oauthClientId', 'pinnedAppIds', 'createdAt', 'updatedAt']) &&
+                         isValidPreferences(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(prefId) &&
+                         isValidPreferences(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['themePalette', 'darkMode', 'usTimezoneId', 'oauthClientId', 'pinnedAppIds', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(prefId);
+      }
+
+      match /browser_vault/{vaultId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(vaultId);
+        allow create: if isOwner(userId) && isValidId(vaultId) &&
+                         incoming().keys().hasAll(['userId', 'tabsJson', 'activeTabIndex', 'bookmarksJson', 'cookiesJson', 'webStorageJson', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'tabsJson', 'activeTabIndex', 'bookmarksJson', 'cookiesJson', 'webStorageJson', 'createdAt', 'updatedAt']) &&
+                         isValidBrowserVault(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(vaultId) &&
+                         isValidBrowserVault(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['tabsJson', 'activeTabIndex', 'bookmarksJson', 'cookiesJson', 'webStorageJson', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(vaultId);
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">USA Virtual Android Pro</string>
+    <string name="sign_in_google">Sign in with Google</string>
+    <string name="sign_out">Sign out</string>
+    <string name="lock_screen_subtitle">Cloud-synced Pixel Material You Virtual OS</string>
+    <string name="auth_error_generic">Google Sign-In failed. Please verify your network and try again.</string>
+    <string name="search_hint">Search apps, contacts, notes, or web…</string>
+    <string name="drawer_search_hint">Search 16 virtual apps…</string>
+    <string name="nav_back_desc">Virtual back</string>
+    <string name="nav_home_desc">Virtual home</string>
+    <string name="nav_recents_desc">Virtual recents</string>
+    <string name="shade_toggle_desc">Open quick settings shade</string>
+    <string name="diagnostics_ip_disclaimer">Virtual device region sets locale and US timezone only. Your real public IP is verified independently below and is never spoofed.</string>
+    <string name="oauth_setup_title">Google Cloud OAuth 2.0 Setup</string>
+    <string name="oauth_redirect_uri">com.aistudio.usavirtualos.mrxpkv:/oauth2redirect</string>
+</resources>

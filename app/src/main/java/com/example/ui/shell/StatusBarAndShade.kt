@@ -56,7 +56,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.model.DevicePreferences
 import com.example.data.network.PublicIpReport
+import com.example.domain.RegionalFormatter
 import com.example.domain.VirtualAppId
 import com.example.ui.theme.MonoCodeStyle
 import com.example.ui.theme.OsPaletteKey
@@ -71,14 +73,7 @@ fun VirtualStatusBar(
   ipReport: PublicIpReport?,
   onToggleShade: () -> Unit,
 ) {
-  val shortZone =
-    when (timezoneId) {
-      "America/New_York" -> "US-EST"
-      "America/Chicago" -> "US-CST"
-      "America/Denver" -> "US-MST"
-      "America/Los_Angeles" -> "US-PST"
-      else -> "US"
-    }
+  val shortZone = RegionalFormatter.shortTimezoneCode(timezoneId)
 
   Surface(
     color = OsTheme.extended.statusBarScrim,
@@ -186,6 +181,7 @@ fun QuickSettingsShadeOverlay(
   visible: Boolean,
   dateFormatted: String,
   shellState: ShellUiState,
+  preferences: DevicePreferences = DevicePreferences(),
   darkMode: Boolean,
   paletteKey: OsPaletteKey,
   ipReport: PublicIpReport?,
@@ -321,8 +317,8 @@ fun QuickSettingsShadeOverlay(
           ) {
             QuickTile(
               icon = Icons.Rounded.Public,
-              label = "US Locale",
-              sublabel = "en-US",
+              label = "Region (${preferences.countryCode})",
+              sublabel = preferences.localeTag,
               active = true,
               onClick = { onOpenApp(VirtualAppId.SETTINGS) },
               modifier = Modifier.weight(1f),

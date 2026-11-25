@@ -1,5 +1,7 @@
 package com.example.ui.apps
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,15 +22,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Backspace
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.Contacts
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Dialpad
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Message
 import androidx.compose.material.icons.rounded.NoteAlt
+import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
@@ -43,29 +50,40 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.CalendarEvent
+import com.example.data.model.DevicePreferences
 import com.example.data.model.MessageThread
 import com.example.data.model.VirtualContact
 import com.example.data.model.VirtualMessage
 import com.example.data.model.VirtualNote
+import com.example.domain.RegionalFormatter
 import com.example.ui.shell.UiState
+import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.noteCardTint
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -433,19 +451,31 @@ fun ContactsApp(
   }
 }
 
-// --- 3. MESSAGES APP ---
+private data class VirtualCallRecord(
+  val number: String,
+  val label: String,
+  val timestampLabel: String,
+)
+
+// --- 3. MESSAGES & PHONE DIALER APP ---
 @Composable
 fun MessagesApp(
   threadsState: UiState<List<MessageThread>>,
   activeThreadId: String?,
   activeMessages: List<VirtualMessage>,
+  contactsState: UiState<List<VirtualContact>> = UiState.Success(emptyList()),
   onSelectThread: (String?) -> Unit,
   onCreateThread: (String, String) -> Unit,
   onSendMessage: (String, String) -> Unit,
   onDeleteThread: (String) -> Unit,
   onCloseApp: () -> Unit,
 ) {
+  val context = LocalContext.current
   var showNewDialog by remember { mutableStateOf(false) }
+  var selectedTab by remember { mutableIntStateOf(0) }
+  var dialNumber by remember { mutableStateOf("+1") }
+  val callLog = remember { mutableStateListOf<VirtualCallRecord>() }
+  var activeCallBanner by remember { mutableStateOf<String?>(null) }
 
   if (activeThreadId != null) {
     BackHandler { onSelectThread(null) }
@@ -526,65 +556,268 @@ fun MessagesApp(
   }
 
   Scaffold(
-    topBar = { VirtualAppTopBar("Messages", "Cloud SMS Threads", onBack = onCloseApp) },
+    topBar = {
+      VirtualAppTopBar(
+        title = "Messages & Phone",
+        subtitle = if (selectedTab == 0) "Synced Threads" else "Dial Pad & System Dialer",
+        onBack = onCloseApp,
+      )
+    },
     floatingActionButton = {
-      FloatingActionButton(
-        onClick = { showNewDialog = true },
-        modifier = Modifier.testTag("new_thread_fab"),
-      ) {
-        Icon(Icons.Rounded.Add, contentDescription = "Start chat")
+      if (selectedTab == 0) {
+        FloatingActionButton(
+          onClick = { showNewDialog = true },
+          modifier = Modifier.testTag("new_thread_fab"),
+        ) {
+          Icon(Icons.Rounded.Add, contentDescription = "Start chat")
+        }
       }
     },
   ) { padding ->
-    Box(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-      when (threadsState) {
-        UiState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
-        is UiState.Error -> EmptyStatePanel(Icons.Rounded.Message, "Sync error", threadsState.message)
-        is UiState.Success -> {
-          if (threadsState.data.isEmpty()) {
-            EmptyStatePanel(
-              icon = Icons.Rounded.Message,
-              title = "No conversations yet",
-              message = "Tap + to start a new thread or message someone from Contacts.",
-            )
-          } else {
-            LazyColumn(
-              verticalArrangement = Arrangement.spacedBy(8.dp),
-              contentPadding = PaddingValues(top = 8.dp, bottom = 84.dp),
-            ) {
-              items(threadsState.data, key = { it.id }) { thread ->
-                Card(
-                  shape = RoundedCornerShape(18.dp),
-                  modifier = Modifier.fillMaxWidth().clickable { onSelectThread(thread.id) },
+    Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+      TabRow(selectedTabIndex = selectedTab) {
+        Tab(
+          selected = selectedTab == 0,
+          onClick = { selectedTab = 0 },
+          text = { Text("Messages") },
+          icon = { Icon(Icons.Rounded.Message, contentDescription = null) },
+        )
+        Tab(
+          selected = selectedTab == 1,
+          onClick = { selectedTab = 1 },
+          text = { Text("Dialer & Calls") },
+          icon = { Icon(Icons.Rounded.Dialpad, contentDescription = null) },
+        )
+      }
+
+      if (selectedTab == 0) {
+        Box(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+          when (threadsState) {
+            UiState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
+            is UiState.Error -> EmptyStatePanel(Icons.Rounded.Message, "Sync error", threadsState.message)
+            is UiState.Success -> {
+              if (threadsState.data.isEmpty()) {
+                EmptyStatePanel(
+                  icon = Icons.Rounded.Message,
+                  title = "No conversations yet",
+                  message = "Tap + to start a new thread or message someone from Contacts.",
+                )
+              } else {
+                LazyColumn(
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
+                  contentPadding = PaddingValues(top = 8.dp, bottom = 84.dp),
                 ) {
-                  Row(
-                    modifier = Modifier.fillMaxWidth().padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                  ) {
-                    Surface(
-                      modifier = Modifier.size(44.dp),
-                      shape = CircleShape,
-                      color = MaterialTheme.colorScheme.secondaryContainer,
+                  items(threadsState.data, key = { it.id }) { thread ->
+                    Card(
+                      shape = RoundedCornerShape(18.dp),
+                      modifier = Modifier.fillMaxWidth().clickable { onSelectThread(thread.id) },
                     ) {
-                      Box(contentAlignment = Alignment.Center) {
-                        Text(thread.contactName.take(1).uppercase(), fontWeight = FontWeight.Bold)
+                      Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                      ) {
+                        Surface(
+                          modifier = Modifier.size(44.dp),
+                          shape = CircleShape,
+                          color = MaterialTheme.colorScheme.secondaryContainer,
+                        ) {
+                          Box(contentAlignment = Alignment.Center) {
+                            Text(thread.contactName.take(1).uppercase(), fontWeight = FontWeight.Bold)
+                          }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                          Text(thread.contactName, style = MaterialTheme.typography.titleMedium)
+                          Text(
+                            text = thread.lastMessage,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                          )
+                        }
+                        IconButton(onClick = { onDeleteThread(thread.id) }) {
+                          Icon(Icons.Rounded.Delete, contentDescription = "Delete thread")
+                        }
                       }
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                      Text(thread.contactName, style = MaterialTheme.typography.titleMedium)
-                      Text(
-                        text = thread.lastMessage,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                      )
-                    }
-                    IconButton(onClick = { onDeleteThread(thread.id) }) {
-                      Icon(Icons.Rounded.Delete, contentDescription = "Delete thread")
+                  }
+                }
+              }
+            }
+          }
+        }
+      } else {
+        val contacts = (contactsState as? UiState.Success)?.data.orEmpty()
+        LazyColumn(
+          modifier = Modifier.fillMaxSize(),
+          contentPadding = PaddingValues(16.dp),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          item {
+            Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+              Row(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                  text = "Carrier PSTN voice calling & SMS require a mobile carrier plan. Use System Dialer to hand off to your device phone app, or log virtual calls below.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+              }
+            }
+          }
+
+          if (activeCallBanner != null) {
+            item {
+              Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.fillMaxWidth(),
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth().padding(14.dp),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Text(activeCallBanner!!, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                  TextButton(onClick = { activeCallBanner = null }) { Text("End") }
+                }
+              }
+            }
+          }
+
+          if (contacts.isNotEmpty()) {
+            item {
+              LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(contacts.take(6), key = { it.id }) { contact ->
+                  FilterChip(
+                    selected = dialNumber == contact.phone,
+                    onClick = { if (contact.phone.isNotBlank()) dialNumber = contact.phone },
+                    label = { Text(contact.name) },
+                  )
+                }
+              }
+            }
+          }
+
+          item {
+            Surface(
+              shape = RoundedCornerShape(20.dp),
+              color = MaterialTheme.colorScheme.surfaceContainerLow,
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Text(
+                  text = dialNumber.ifBlank { "Enter number" },
+                  style = MaterialTheme.typography.headlineMedium.copy(fontFamily = JetBrainsMonoFamily),
+                  modifier = Modifier.weight(1f),
+                  maxLines = 1,
+                )
+                IconButton(
+                  onClick = { if (dialNumber.isNotEmpty()) dialNumber = dialNumber.dropLast(1) }
+                ) {
+                  Icon(Icons.AutoMirrored.Rounded.Backspace, contentDescription = "Backspace digit")
+                }
+              }
+            }
+          }
+
+          item {
+            val dialRows = listOf(
+              listOf("1", "2", "3"),
+              listOf("4", "5", "6"),
+              listOf("7", "8", "9"),
+              listOf("*", "0", "#"),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+              dialRows.forEach { row ->
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                  row.forEach { digit ->
+                    Surface(
+                      shape = RoundedCornerShape(18.dp),
+                      color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                      modifier =
+                        Modifier.weight(1f)
+                          .height(52.dp)
+                          .clip(RoundedCornerShape(18.dp))
+                          .clickable { dialNumber += digit },
+                    ) {
+                      Box(contentAlignment = Alignment.Center) {
+                        Text(digit, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+                      }
                     }
                   }
+                }
+              }
+            }
+          }
+
+          item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+              Button(
+                onClick = {
+                  val target = dialNumber.trim()
+                  if (target.isNotBlank()) {
+                    val matchedName =
+                      contacts.firstOrNull { it.phone == target }?.name ?: "External Number"
+                    val timeLabel = SimpleDateFormat("h:mm a", Locale.US).format(Date())
+                    callLog.add(0, VirtualCallRecord(target, matchedName, timeLabel))
+                    activeCallBanner = "Virtual Call Log • $matchedName ($target)"
+                  }
+                },
+                enabled = dialNumber.isNotBlank(),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.weight(1f),
+              ) {
+                Icon(Icons.Rounded.Call, contentDescription = null)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Log Call")
+              }
+              OutlinedButton(
+                onClick = {
+                  val target = dialNumber.trim()
+                  if (target.isNotBlank()) {
+                    runCatching {
+                      context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$target")))
+                    }
+                  }
+                },
+                enabled = dialNumber.isNotBlank(),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.weight(1f),
+              ) {
+                Icon(Icons.Rounded.OpenInNew, contentDescription = null)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("System Dialer")
+              }
+            }
+          }
+
+          if (callLog.isNotEmpty()) {
+            item { Text("Session Call Log", style = MaterialTheme.typography.titleSmall) }
+            items(callLog) { entry ->
+              Card(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                Row(
+                  modifier = Modifier.fillMaxWidth().padding(12.dp),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Column {
+                    Text(entry.label, style = MaterialTheme.typography.titleSmall)
+                    Text(entry.number, style = MaterialTheme.typography.bodySmall)
+                  }
+                  Text(entry.timestampLabel, style = MaterialTheme.typography.labelSmall)
                 }
               }
             }
@@ -626,16 +859,21 @@ fun MessagesApp(
 @Composable
 fun CalendarApp(
   eventsState: UiState<List<CalendarEvent>>,
-  usTimezoneId: String,
+  preferences: DevicePreferences = DevicePreferences(),
   onSaveEvent: (CalendarEvent) -> Unit,
   onDeleteEvent: (String) -> Unit,
   onCloseApp: () -> Unit,
 ) {
   var editing by remember { mutableStateOf<CalendarEvent?>(null) }
-  val dateFormat = remember { SimpleDateFormat("EEE, MMM d", Locale.US) }
 
   Scaffold(
-    topBar = { VirtualAppTopBar("Calendar", usTimezoneId, onBack = onCloseApp) },
+    topBar = {
+      VirtualAppTopBar(
+        title = "Calendar",
+        subtitle = "${preferences.usTimezoneId} (${RegionalFormatter.shortTimezoneCode(preferences.usTimezoneId)})",
+        onBack = onCloseApp,
+      )
+    },
     floatingActionButton = {
       FloatingActionButton(
         onClick = {
@@ -682,7 +920,7 @@ fun CalendarApp(
                         horizontalAlignment = Alignment.CenterHorizontally,
                       ) {
                         Text(
-                          text = dateFormat.format(Date(event.dateEpochMillis)),
+                          text = RegionalFormatter.formatDate(event.dateEpochMillis, preferences),
                           style = MaterialTheme.typography.labelMedium,
                           color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )

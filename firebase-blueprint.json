@@ -121,7 +121,7 @@
     },
     "DevicePreferences": {
       "title": "DevicePreferences",
-      "description": "Virtual OS visual theme, US timezone, pinned apps, and OAuth Client ID.",
+      "description": "Virtual OS visual theme, USA virtual device regional settings, pinned apps, and OAuth Client ID.",
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
@@ -131,17 +131,29 @@
           "description": "Material You seed palette."
         },
         "darkMode": { "type": "boolean", "description": "Dark mode preference." },
-        "usTimezoneId": {
-          "type": "string",
-          "enum": ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"],
-          "description": "Virtual US timezone ID."
-        },
+        "countryCode": { "type": "string", "description": "ISO country code (default US)." },
+        "countryName": { "type": "string", "description": "Display country name (default United States)." },
+        "stateRegion": { "type": "string", "description": "State or region name (default New York)." },
+        "localeTag": { "type": "string", "description": "BCP-47 locale tag (default en-US)." },
+        "languageName": { "type": "string", "description": "Display language name." },
+        "usTimezoneId": { "type": "string", "description": "Virtual time zone ID (default America/New_York)." },
+        "dateFormat": { "type": "string", "enum": ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"], "description": "Date format pattern." },
+        "use24HourTime": { "type": "boolean", "description": "False for 12-hour default, true for 24-hour." },
+        "currencyCode": { "type": "string", "description": "3-letter currency code (default USD)." },
+        "numberFormat": { "type": "string", "enum": ["1,234.56", "1.234,56", "1 234,56"], "description": "Number grouping & decimal style." },
+        "temperatureUnit": { "type": "string", "enum": ["FAHRENHEIT", "CELSIUS"], "description": "Temperature scale." },
+        "measurementSystem": { "type": "string", "enum": ["US_CUSTOMARY", "METRIC"], "description": "Measurement unit system." },
         "oauthClientId": { "type": "string", "description": "User-supplied Google Cloud OAuth Client ID." },
         "pinnedAppIds": { "type": "array", "description": "Pinned Home Screen app IDs." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
       },
-      "required": ["userId", "themePalette", "darkMode", "usTimezoneId", "oauthClientId", "pinnedAppIds", "createdAt", "updatedAt"]
+      "required": [
+        "userId", "themePalette", "darkMode", "countryCode", "countryName", "stateRegion",
+        "localeTag", "languageName", "usTimezoneId", "dateFormat", "use24HourTime",
+        "currencyCode", "numberFormat", "temperatureUnit", "measurementSystem",
+        "oauthClientId", "pinnedAppIds", "createdAt", "updatedAt"
+      ]
     },
     "BrowserVault": {
       "title": "BrowserVault",

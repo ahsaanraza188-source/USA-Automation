@@ -3,6 +3,9 @@ package com.example.domain
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlin.math.PI
+import kotlin.math.acos
+import kotlin.math.asin
+import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.log10
@@ -116,6 +119,20 @@ object CalculatorEngine {
               "sin" -> sin(angle)
               "cos" -> cos(angle)
               "tan" -> tan(angle)
+              "asin" -> {
+                if (x < -1.0 || x > 1.0) throw ArithmeticException("Domain error")
+                val res = asin(x)
+                if (useDegrees) Math.toDegrees(res) else res
+              }
+              "acos" -> {
+                if (x < -1.0 || x > 1.0) throw ArithmeticException("Domain error")
+                val res = acos(x)
+                if (useDegrees) Math.toDegrees(res) else res
+              }
+              "atan" -> {
+                val res = atan(x)
+                if (useDegrees) Math.toDegrees(res) else res
+              }
               "log" -> {
                 if (x <= 0) throw ArithmeticException("Invalid log")
                 log10(x)
@@ -131,9 +148,25 @@ object CalculatorEngine {
         throw IllegalArgumentException("Unexpected character")
       }
 
-      if (eat('^')) x = x.pow(parseFactor())
-      if (eat('%')) x /= 100.0
+      while (true) {
+        when {
+          eat('^') -> x = x.pow(parseFactor())
+          eat('%') -> x /= 100.0
+          eat('!') -> x = factorial(x)
+          else -> break
+        }
+      }
       return x
+    }
+
+    private fun factorial(v: Double): Double {
+      val n = v.toInt()
+      if (v < 0 || v != n.toDouble() || n > 170) {
+        throw ArithmeticException("Invalid factorial")
+      }
+      var acc = 1.0
+      for (i in 2..n) acc *= i
+      return acc
     }
   }
 }

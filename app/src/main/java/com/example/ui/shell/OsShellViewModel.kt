@@ -11,14 +11,13 @@ import com.example.data.model.VirtualContact
 import com.example.data.model.VirtualFileRecord
 import com.example.data.model.VirtualMessage
 import com.example.data.model.VirtualNote
+import com.example.data.network.AppDiagnosticsLogger
 import com.example.data.repository.VirtualOsDataSource
+import com.example.domain.RegionalFormatter
 import com.example.domain.VirtualAppId
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -52,6 +51,7 @@ data class ShellUiState(
   val activeThreadId: String? = null,
   val pendingBrowserUrl: String? = null,
   val pendingSearchQuery: String = "",
+  val searchHistory: List<String> = emptyList(),
   val statusMessage: String? = null,
 )
 
@@ -175,6 +175,12 @@ class OsShellViewModel(
     if (firestoreError == null && error is CancellationException) throw error
     val root = firestoreError ?: error
     Log.w(TAG, "Error observing $tag", root)
+    AppDiagnosticsLogger.error(
+      component = "Storage/$tag",
+      message = "Failed to observe $tag",
+      throwable = root,
+      recoveryHint = "Check network connection or Firestore rules permissions.",
+    )
     return root.message ?: "Failed to load $tag"
   }
 
@@ -288,6 +294,17 @@ class OsShellViewModel(
   fun openSearchWithQuery(query: String) {
     _shellState.value = _shellState.value.copy(pendingSearchQuery = query)
     launchApp(VirtualAppId.SEARCH)
+  }
+
+  fun recordSearchQuery(query: String) {
+    val clean = query.trim()
+    if (clean.isBlank()) return
+    val updated = (listOf(clean) + _shellState.value.searchHistory.filterNot { it.equals(clean, ignoreCase = true) }).take(15)
+    _shellState.value = _shellState.value.copy(searchHistory = updated)
+  }
+
+  fun clearSearchHistory() {
+    _shellState.value = _shellState.value.copy(searchHistory = emptyList())
   }
 
   fun setActiveThread(threadId: String?) {
@@ -432,15 +449,23 @@ class OsShellViewModel(
 
   suspend fun checkCloudHealth(): Boolean = repository.verifyCloudHealth()
 
-  fun formatUsTime(zoneIdStr: String): String {
-    val tz = TimeZone.getTimeZone(zoneIdStr.ifBlank { "America/New_York" })
-    return SimpleDateFormat("h:mm a", Locale.US).apply { timeZone = tz }.format(Date(_clockTick.value))
-  }
+  fun formatRegionalTime(prefs: DevicePreferences): String =
+    RegionalFormatter.formatTime(_clockTick.value, prefs)
 
-  fun formatUsDate(zoneIdStr: String): String {
-    val tz = TimeZone.getTimeZone(zoneIdStr.ifBlank { "America/New_York" })
-    return SimpleDateFormat("EEE, MMM d • z", Locale.US).apply { timeZone = tz }.format(Date(_clockTick.value))
-  }
+  fun formatRegionalDate(prefs: DevicePreferences): String =
+    RegionalFormatter.formatHomeAtAGlanceDate(_clockTick.value, prefs)
+
+  fun formatUsTime(zoneIdStr: String): String =
+    RegionalFormatter.formatTime(
+      _clockTick.value,
+      DevicePreferences(usTimezoneId = zoneIdStr.ifBlank { "America/New_York" }),
+    )
+
+  fun formatUsDate(zoneIdStr: String): String =
+    RegionalFormatter.formatHomeAtAGlanceDate(
+      _clockTick.value,
+      DevicePreferences(usTimezoneId = zoneIdStr.ifBlank { "America/New_York" }),
+    )
 
   private companion object {
     const val TAG = "OsShellVM"

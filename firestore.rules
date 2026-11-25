@@ -106,7 +106,18 @@ service cloud.firestore {
       return data.userId == userId &&
              data.themePalette in ['COBALT', 'MEADOW', 'TERRACOTTA', 'AMETHYST'] &&
              data.darkMode is bool &&
-             data.usTimezoneId in ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles'] &&
+             data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 8 &&
+             data.countryName is string && data.countryName.size() >= 1 && data.countryName.size() <= 80 &&
+             data.stateRegion is string && data.stateRegion.size() <= 80 &&
+             data.localeTag is string && data.localeTag.size() >= 2 && data.localeTag.size() <= 20 &&
+             data.languageName is string && data.languageName.size() >= 1 && data.languageName.size() <= 80 &&
+             data.usTimezoneId is string && data.usTimezoneId.size() >= 3 && data.usTimezoneId.size() <= 60 &&
+             data.dateFormat in ['MM/DD/YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD'] &&
+             data.use24HourTime is bool &&
+             data.currencyCode is string && data.currencyCode.size() == 3 &&
+             data.numberFormat in ['1,234.56', '1.234,56', '1 234,56'] &&
+             data.temperatureUnit in ['FAHRENHEIT', 'CELSIUS'] &&
+             data.measurementSystem in ['US_CUSTOMARY', 'METRIC'] &&
              data.oauthClientId is string && data.oauthClientId.size() <= 200 &&
              data.pinnedAppIds is list && data.pinnedAppIds.size() <= 20 &&
              (data.pinnedAppIds.size() == 0 || data.pinnedAppIds[0] is string) &&
@@ -235,14 +246,29 @@ service cloud.firestore {
         allow list: if isOwner(userId);
         allow get: if isOwner(userId) && isValidId(prefId);
         allow create: if isOwner(userId) && isValidId(prefId) &&
-                         incoming().keys().hasAll(['userId', 'themePalette', 'darkMode', 'usTimezoneId', 'oauthClientId', 'pinnedAppIds', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['userId', 'themePalette', 'darkMode', 'usTimezoneId', 'oauthClientId', 'pinnedAppIds', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasAll([
+                           'userId', 'themePalette', 'darkMode', 'countryCode', 'countryName',
+                           'stateRegion', 'localeTag', 'languageName', 'usTimezoneId', 'dateFormat',
+                           'use24HourTime', 'currencyCode', 'numberFormat', 'temperatureUnit',
+                           'measurementSystem', 'oauthClientId', 'pinnedAppIds', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'themePalette', 'darkMode', 'countryCode', 'countryName',
+                           'stateRegion', 'localeTag', 'languageName', 'usTimezoneId', 'dateFormat',
+                           'use24HourTime', 'currencyCode', 'numberFormat', 'temperatureUnit',
+                           'measurementSystem', 'oauthClientId', 'pinnedAppIds', 'createdAt', 'updatedAt'
+                         ]) &&
                          isValidPreferences(incoming(), userId);
         allow update: if isOwner(userId) && isValidId(prefId) &&
                          isValidPreferences(incoming(), userId) &&
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['themePalette', 'darkMode', 'usTimezoneId', 'oauthClientId', 'pinnedAppIds', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'themePalette', 'darkMode', 'countryCode', 'countryName', 'stateRegion',
+                           'localeTag', 'languageName', 'usTimezoneId', 'dateFormat', 'use24HourTime',
+                           'currencyCode', 'numberFormat', 'temperatureUnit', 'measurementSystem',
+                           'oauthClientId', 'pinnedAppIds', 'updatedAt'
+                         ]);
         allow delete: if isOwner(userId) && isValidId(prefId);
       }
 

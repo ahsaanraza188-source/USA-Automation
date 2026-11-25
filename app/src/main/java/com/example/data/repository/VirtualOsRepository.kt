@@ -551,35 +551,39 @@ class VirtualOsRepository(
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("preferences").document(SETTINGS_DOC_ID)
     try {
+      val mutableFields =
+        mapOf(
+          "themePalette" to prefs.themePalette,
+          "darkMode" to prefs.darkMode,
+          "countryCode" to prefs.countryCode.take(8),
+          "countryName" to prefs.countryName.take(80),
+          "stateRegion" to prefs.stateRegion.take(80),
+          "localeTag" to prefs.localeTag.take(20),
+          "languageName" to prefs.languageName.take(80),
+          "usTimezoneId" to prefs.usTimezoneId.take(60),
+          "dateFormat" to prefs.dateFormat,
+          "use24HourTime" to prefs.use24HourTime,
+          "currencyCode" to prefs.currencyCode.take(3),
+          "numberFormat" to prefs.numberFormat,
+          "temperatureUnit" to prefs.temperatureUnit,
+          "measurementSystem" to prefs.measurementSystem,
+          "oauthClientId" to prefs.oauthClientId.take(200),
+          "pinnedAppIds" to prefs.pinnedAppIds.take(20),
+          "updatedAt" to FieldValue.serverTimestamp(),
+        )
       val existing = docRef.get().await()
       if (!existing.exists()) {
         docRef
           .set(
-            mapOf(
-              "userId" to uid,
-              "themePalette" to prefs.themePalette,
-              "darkMode" to prefs.darkMode,
-              "usTimezoneId" to prefs.usTimezoneId,
-              "oauthClientId" to prefs.oauthClientId.take(200),
-              "pinnedAppIds" to prefs.pinnedAppIds.take(20),
-              "createdAt" to FieldValue.serverTimestamp(),
-              "updatedAt" to FieldValue.serverTimestamp(),
-            )
+            mutableFields +
+              mapOf(
+                "userId" to uid,
+                "createdAt" to FieldValue.serverTimestamp(),
+              )
           )
           .await()
       } else {
-        docRef
-          .update(
-            mapOf(
-              "themePalette" to prefs.themePalette,
-              "darkMode" to prefs.darkMode,
-              "usTimezoneId" to prefs.usTimezoneId,
-              "oauthClientId" to prefs.oauthClientId.take(200),
-              "pinnedAppIds" to prefs.pinnedAppIds.take(20),
-              "updatedAt" to FieldValue.serverTimestamp(),
-            )
-          )
-          .await()
+        docRef.update(mutableFields).await()
       }
     } catch (e: CancellationException) {
       throw e

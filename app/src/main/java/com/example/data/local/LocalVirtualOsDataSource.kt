@@ -563,7 +563,18 @@ class LocalVirtualOsDataSource(context: Context) : VirtualOsDataSource {
         userId = LOCAL_UID,
         themePalette = o.optString("themePalette", "COBALT"),
         darkMode = o.optBoolean("darkMode", false),
-        usTimezoneId = o.optString("usTimezoneId", "America/New_York"),
+        countryCode = o.optString("countryCode", "US").ifBlank { "US" },
+        countryName = o.optString("countryName", "United States").ifBlank { "United States" },
+        stateRegion = o.optString("stateRegion", "New York").ifBlank { "New York" },
+        localeTag = o.optString("localeTag", "en-US").ifBlank { "en-US" },
+        languageName = o.optString("languageName", "English (United States)").ifBlank { "English (United States)" },
+        usTimezoneId = o.optString("usTimezoneId", "America/New_York").ifBlank { "America/New_York" },
+        dateFormat = o.optString("dateFormat", "MM/DD/YYYY").ifBlank { "MM/DD/YYYY" },
+        use24HourTime = o.optBoolean("use24HourTime", false),
+        currencyCode = o.optString("currencyCode", "USD").ifBlank { "USD" },
+        numberFormat = o.optString("numberFormat", "1,234.56").ifBlank { "1,234.56" },
+        temperatureUnit = o.optString("temperatureUnit", "FAHRENHEIT").ifBlank { "FAHRENHEIT" },
+        measurementSystem = o.optString("measurementSystem", "US_CUSTOMARY").ifBlank { "US_CUSTOMARY" },
         oauthClientId = o.optString("oauthClientId"),
         pinnedAppIds = pinned,
       )
@@ -574,7 +585,18 @@ class LocalVirtualOsDataSource(context: Context) : VirtualOsDataSource {
     JSONObject().apply {
       put("themePalette", p.themePalette)
       put("darkMode", p.darkMode)
+      put("countryCode", p.countryCode)
+      put("countryName", p.countryName)
+      put("stateRegion", p.stateRegion)
+      put("localeTag", p.localeTag)
+      put("languageName", p.languageName)
       put("usTimezoneId", p.usTimezoneId)
+      put("dateFormat", p.dateFormat)
+      put("use24HourTime", p.use24HourTime)
+      put("currencyCode", p.currencyCode)
+      put("numberFormat", p.numberFormat)
+      put("temperatureUnit", p.temperatureUnit)
+      put("measurementSystem", p.measurementSystem)
       put("oauthClientId", p.oauthClientId)
       put("pinnedAppIds", JSONArray(p.pinnedAppIds))
     }.toString()

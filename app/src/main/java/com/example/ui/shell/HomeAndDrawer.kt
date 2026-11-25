@@ -9,9 +9,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +40,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,6 +49,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,8 +70,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.CalendarEvent
+import com.example.data.model.DevicePreferences
 import com.example.data.network.PublicIpReport
 import com.example.domain.AppCategory
+import com.example.domain.RegionalFormatter
 import com.example.domain.VirtualAppCatalog
 import com.example.domain.VirtualAppId
 import com.example.domain.VirtualAppSpec
@@ -78,6 +85,7 @@ fun VirtualHomeScreen(
   paletteKey: OsPaletteKey,
   dateFormatted: String,
   timeFormatted: String,
+  preferences: DevicePreferences = DevicePreferences(),
   nextEvent: CalendarEvent?,
   ipReport: PublicIpReport?,
   pinnedAppIds: List<String>,
@@ -159,7 +167,7 @@ fun VirtualHomeScreen(
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically,
             ) {
-              Column {
+              Column(modifier = Modifier.weight(1f)) {
                 Text(
                   text = dateFormatted,
                   style = MaterialTheme.typography.titleLarge,
@@ -167,9 +175,17 @@ fun VirtualHomeScreen(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                  text = "USA Virtual Android Pro • $timeFormatted",
+                  text = "${preferences.countryCode} (${preferences.localeTag}) • $timeFormatted",
                   style = MaterialTheme.typography.bodyMedium,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                  text =
+                    "${RegionalFormatter.formatTemperature(72.0, preferences)} • " +
+                      "${preferences.currencyCode} • " +
+                      if (preferences.measurementSystem == "US_CUSTOMARY") "US Units (mi, lb)" else "Metric (km, kg)",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.primary,
                 )
               }
 
@@ -372,6 +388,7 @@ fun AppDrawerOverlay(
   ) {
     var query by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf<AppCategory?>(null) }
+    var inspectedSpec by remember { mutableStateOf<VirtualAppSpec?>(null) }
 
     val filtered =
       remember(query, selectedCategory) {
@@ -395,11 +412,18 @@ fun AppDrawerOverlay(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-          Text(
-            text = "All Apps (16)",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-          )
+          Column {
+            Text(
+              text = "All Apps (16)",
+              style = MaterialTheme.typography.headlineMedium,
+              color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+              text = "Long-press an app icon to inspect version & permissions",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
           IconButton(onClick = onDismiss, modifier = Modifier.testTag("close_drawer_btn")) {
             Icon(Icons.Rounded.Close, contentDescription = "Close App Drawer")
           }
@@ -447,21 +471,50 @@ fun AppDrawerOverlay(
             VirtualAppIconTile(
               spec = spec,
               onClick = { onLaunchApp(spec.appId) },
+              onLongClick = { inspectedSpec = spec },
               testTag = "drawer_app_${spec.appId.id}",
             )
           }
         }
       }
     }
+
+    inspectedSpec?.let { spec ->
+      AlertDialog(
+        onDismissRequest = { inspectedSpec = null },
+        title = { Text("${spec.title} • v${spec.version}") },
+        text = {
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(spec.subtitle, style = MaterialTheme.typography.bodyMedium)
+            Text("Category: ${spec.category.label}", style = MaterialTheme.typography.bodySmall)
+            Text("Footprint: ${spec.sizeLabel}", style = MaterialTheme.typography.bodySmall)
+            Text("Permissions: ${spec.permissionsSummary}", style = MaterialTheme.typography.bodySmall)
+          }
+        },
+        confirmButton = {
+          Button(
+            onClick = {
+              inspectedSpec = null
+              onLaunchApp(spec.appId)
+            }
+          ) { Text("Open App") }
+        },
+        dismissButton = {
+          TextButton(onClick = { inspectedSpec = null }) { Text("Close") }
+        },
+      )
+    }
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun VirtualAppIconTile(
   spec: VirtualAppSpec,
   onClick: () -> Unit,
   testTag: String,
   showLabel: Boolean = true,
+  onLongClick: (() -> Unit)? = null,
 ) {
   val containerColor =
     when (spec.accentIndex) {
@@ -482,7 +535,7 @@ fun VirtualAppIconTile(
     horizontalAlignment = Alignment.CenterHorizontally,
     modifier =
       Modifier.clip(RoundedCornerShape(18.dp))
-        .clickable(onClick = onClick)
+        .combinedClickable(onClick = onClick, onLongClick = onLongClick)
         .padding(4.dp)
         .testTag(testTag),
   ) {

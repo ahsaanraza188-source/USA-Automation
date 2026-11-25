@@ -40,12 +40,17 @@ class GoogleApisClient {
       .readTimeout(12, TimeUnit.SECONDS)
       .build()
 
-  suspend fun fetchGmailInbox(accessToken: String, maxResults: Int = 12): Result<List<GmailMessageSummary>> =
+  suspend fun fetchGmailInbox(
+    accessToken: String,
+    labelId: String = "INBOX",
+    maxResults: Int = 12,
+  ): Result<List<GmailMessageSummary>> =
     withContext(Dispatchers.IO) {
       runCatching {
+        val encodedLabel = URLEncoder.encode(labelId.ifBlank { "INBOX" }, "UTF-8")
         val listReq =
           Request.Builder()
-            .url("https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=$maxResults")
+            .url("https://gmail.googleapis.com/gmail/v1/users/me/messages?labelIds=$encodedLabel&maxResults=$maxResults")
             .header("Authorization", "Bearer $accessToken")
             .get()
             .build()

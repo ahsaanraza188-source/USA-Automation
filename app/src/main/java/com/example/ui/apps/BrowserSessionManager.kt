@@ -31,11 +31,21 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+import android.webkit.WebResourceError
+import com.example.data.network.AppDiagnosticsLogger
+
+data class BrowserHistoryEntry(
+  val title: String,
+  val url: String,
+  val visitedAtMillis: Long = System.currentTimeMillis(),
+)
+
 data class BrowserUiState(
   val isRestored: Boolean = false,
   val tabs: List<PersistedBrowserTab> = BrowserSessionStore.defaultTabs(),
   val activeTabIndex: Int = 0,
   val bookmarks: List<BrowserBookmark> = BrowserSessionStore.defaultBookmarks(),
+  val history: List<BrowserHistoryEntry> = emptyList(),
   val loadProgress: Int = 100,
   val canGoBack: Boolean = false,
   val canGoForward: Boolean = false,
@@ -303,16 +313,25 @@ class BrowserSessionManager(
     }
   }
 
-  fun openNewTab(url: String = "https://www.google.com/", title: String = "New Tab"): Int {
+  fun openNewTab(
+    url: String = "https://www.google.com/",
+    title: String = "New Tab",
+    isIncognito: Boolean = false,
+  ): Int {
     val state = _uiState.value
     val nextId = (state.tabs.maxOfOrNull { it.id } ?: 0) + 1
-    val newTab = PersistedBrowserTab(id = nextId, title = title, url = url)
+    val resolvedTitle = if (isIncognito && title == "New Tab") "Private Tab" else title
+    val newTab = PersistedBrowserTab(id = nextId, title = resolvedTitle, url = url, isIncognito = isIncognito)
     val updatedTabs = state.tabs + newTab
     val nextIndex = updatedTabs.lastIndex
     _uiState.value = state.copy(tabs = updatedTabs, activeTabIndex = nextIndex)
-    schedulePersist()
+    if (!isIncognito) schedulePersist()
     refreshNavFlags(nextId)
     return nextId
+  }
+
+  fun clearHistory() {
+    _uiState.value = _uiState.value.copy(history = emptyList())
   }
 
   fun selectTab(index: Int) {
@@ -473,7 +492,7 @@ class BrowserSessionManager(
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
               if (!url.isNullOrBlank()) {
                 updateTabMetadata(tab.id, url = url, title = null)
-                captureCookiesForUrl(url)
+                if (!tab.isIncognito) captureCookiesForUrl(url)
               }
               refreshNavFlags(tab.id)
             }
@@ -485,7 +504,10 @@ class BrowserSessionManager(
             ) {
               if (!url.isNullOrBlank()) {
                 updateTabMetadata(tab.id, url = url, title = view?.title)
-                captureCookiesForUrl(url)
+                if (!tab.isIncognito) {
+                  captureCookiesForUrl(url)
+                  recordHistoryEntry(url, view?.title)
+                }
               }
               refreshNavFlags(tab.id)
             }
@@ -497,11 +519,29 @@ class BrowserSessionManager(
                   url = url,
                   title = view?.title?.takeIf { it.isNotBlank() },
                 )
-                captureCookiesForUrl(url)
-                captureAndRestoreWebStorage(view, url)
+                if (!tab.isIncognito) {
+                  captureCookiesForUrl(url)
+                  captureAndRestoreWebStorage(view, url)
+                  recordHistoryEntry(url, view?.title)
+                }
               }
-              schedulePersist()
+              if (!tab.isIncognito) schedulePersist()
               refreshNavFlags(tab.id)
+            }
+
+            override fun onReceivedError(
+              view: WebView?,
+              request: WebResourceRequest?,
+              error: WebResourceError?,
+            ) {
+              if (request?.isForMainFrame == true) {
+                AppDiagnosticsLogger.warn(
+                  component = "Chrome WebView",
+                  message = "Page load error for ${request.url}",
+                  rootCause = "Code ${error?.errorCode}: ${error?.description}",
+                  recoveryHint = "Run DNS/HTTPS checks in Diagnostics Center.",
+                )
+              }
             }
           }
 
@@ -597,12 +637,35 @@ class BrowserSessionManager(
       }
   }
 
+  private fun recordHistoryEntry(url: String, title: String?) {
+    if (!url.startsWith("http")) return
+    val current = _uiState.value.history
+    val latest = current.firstOrNull()
+    val cleanTitle = title?.takeIf { it.isNotBlank() } ?: originOf(url) ?: url
+    if (latest != null && latest.url == url) {
+      if (latest.title != cleanTitle) {
+        _uiState.value =
+          _uiState.value.copy(
+            history = listOf(latest.copy(title = cleanTitle)) + current.drop(1)
+          )
+      }
+      return
+    }
+    _uiState.value =
+      _uiState.value.copy(
+        history = (listOf(BrowserHistoryEntry(title = cleanTitle, url = url)) + current).take(60)
+      )
+  }
+
   fun persistImmediately() {
-    val activeWv = webViews[_uiState.value.activeTab.id]
-    captureCookiesForUrl(activeWv?.url ?: _uiState.value.activeTab.url)
-    val origin = originOf(activeWv?.url ?: _uiState.value.activeTab.url)
-    if (activeWv != null && origin != null) {
-      snapshotLocalStorage(activeWv, origin)
+    val activeTab = _uiState.value.activeTab
+    val activeWv = webViews[activeTab.id]
+    if (!activeTab.isIncognito) {
+      captureCookiesForUrl(activeWv?.url ?: activeTab.url)
+      val origin = originOf(activeWv?.url ?: activeTab.url)
+      if (activeWv != null && origin != null) {
+        snapshotLocalStorage(activeWv, origin)
+      }
     }
     if (_uiState.value.isRestored) {
       viewModelScope.launch { persistSnapshotNow() }
@@ -612,15 +675,18 @@ class BrowserSessionManager(
   private suspend fun persistSnapshotNow() {
     val snapshot = _uiState.value
     if (!snapshot.isRestored) return
-    val tabsJson = BrowserSessionStore.serializeTabs(snapshot.tabs)
+    val persistableTabs =
+      snapshot.tabs.filterNot { it.isIncognito }.ifEmpty { BrowserSessionStore.defaultTabs() }
+    val safeIndex = snapshot.activeTabIndex.coerceIn(0, persistableTabs.lastIndex)
+    val tabsJson = BrowserSessionStore.serializeTabs(persistableTabs)
     val bookmarksJson = BrowserSessionStore.serializeBookmarks(snapshot.bookmarks)
     val cookiesJson = BrowserSessionStore.serializeStringMap(cookiesMap)
     val webStorageJson = BrowserSessionStore.serializeStringMap(webStorageMap)
 
     store.saveAll(
       userId = userId,
-      tabs = snapshot.tabs,
-      activeTabIndex = snapshot.activeTabIndex,
+      tabs = persistableTabs,
+      activeTabIndex = safeIndex,
       bookmarks = snapshot.bookmarks,
       cookiesMap = cookiesMap,
       webStorageMap = webStorageMap,
@@ -631,7 +697,7 @@ class BrowserSessionManager(
         BrowserVault(
           userId = userId,
           tabsJson = tabsJson,
-          activeTabIndex = snapshot.activeTabIndex.toLong(),
+          activeTabIndex = safeIndex.toLong(),
           bookmarksJson = bookmarksJson,
           cookiesJson = cookiesJson,
           webStorageJson = webStorageJson,

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.OAuthTokenState
 import com.example.data.local.OAuthTokenStore
+import com.example.data.network.AppDiagnosticsLogger
 import com.example.data.network.GmailMessageSummary
 import com.example.data.network.GoogleApisClient
 import com.example.data.network.GoogleOAuthManager
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 data class GoogleServicesUiState(
+  val selectedGmailLabel: String = "INBOX",
   val isGmailLoading: Boolean = false,
   val gmailMessages: List<GmailMessageSummary> = emptyList(),
   val gmailError: String? = null,
@@ -52,6 +54,12 @@ class GoogleServicesViewModel(
       oauthManager
         .launchPkceAuthorization(clientId)
         .onFailure { err ->
+          AppDiagnosticsLogger.error(
+            component = "OAuth",
+            message = "Failed to launch Google OAuth PKCE flow",
+            throwable = err,
+            recoveryHint = "Check Client ID in Settings and ensure browser/custom tabs are available.",
+          )
           _uiState.value = _uiState.value.copy(oauthFeedback = err.message ?: "OAuth launch failed")
         }
     }
@@ -60,6 +68,7 @@ class GoogleServicesViewModel(
   fun disconnectOAuth() {
     viewModelScope.launch {
       oauthManager.disconnect()
+      AppDiagnosticsLogger.info("OAuth", "Disconnected OAuth token from device")
       _uiState.value =
         _uiState.value.copy(
           gmailMessages = emptyList(),
@@ -69,17 +78,28 @@ class GoogleServicesViewModel(
     }
   }
 
-  fun refreshGmail() {
+  fun refreshGmail(labelId: String = _uiState.value.selectedGmailLabel) {
     val token = tokenState.value.accessToken
     if (token.isBlank()) return
     viewModelScope.launch {
-      _uiState.value = _uiState.value.copy(isGmailLoading = true, gmailError = null)
+      _uiState.value =
+        _uiState.value.copy(
+          selectedGmailLabel = labelId,
+          isGmailLoading = true,
+          gmailError = null,
+        )
       apisClient
-        .fetchGmailInbox(token)
+        .fetchGmailInbox(token, labelId = labelId)
         .onSuccess { list ->
           _uiState.value = _uiState.value.copy(isGmailLoading = false, gmailMessages = list)
         }
         .onFailure { err ->
+          AppDiagnosticsLogger.error(
+            component = "Gmail API",
+            message = "Failed to load Gmail folder $labelId",
+            throwable = err,
+            recoveryHint = "Verify OAuth token scopes & Gmail API enablement in Google Cloud Console.",
+          )
           _uiState.value =
             _uiState.value.copy(isGmailLoading = false, gmailError = err.message ?: "Failed to load Gmail")
         }
@@ -94,11 +114,18 @@ class GoogleServicesViewModel(
       apisClient
         .sendGmailMessage(token, to, subject, body)
         .onSuccess {
+          AppDiagnosticsLogger.info("Gmail API", "Sent email to $to")
           _uiState.value =
             _uiState.value.copy(isGmailLoading = false, gmailSendStatus = "Email sent via Gmail API")
           refreshGmail()
         }
         .onFailure { err ->
+          AppDiagnosticsLogger.error(
+            component = "Gmail API",
+            message = "Failed to send email via Gmail API",
+            throwable = err,
+            recoveryHint = "Verify gmail.send scope and recipient format.",
+          )
           _uiState.value =
             _uiState.value.copy(
               isGmailLoading = false,
@@ -119,6 +146,12 @@ class GoogleServicesViewModel(
           _uiState.value = _uiState.value.copy(isYouTubeLoading = false, youtubeVideos = list)
         }
         .onFailure { err ->
+          AppDiagnosticsLogger.error(
+            component = "YouTube API",
+            message = "YouTube search failed for '$query'",
+            throwable = err,
+            recoveryHint = "Verify YouTube Data API v3 is enabled for your OAuth Client ID.",
+          )
           _uiState.value =
             _uiState.value.copy(
               isYouTubeLoading = false,
@@ -139,6 +172,12 @@ class GoogleServicesViewModel(
           _uiState.value = _uiState.value.copy(isYouTubeLoading = false, youtubeVideos = list)
         }
         .onFailure { err ->
+          AppDiagnosticsLogger.error(
+            component = "YouTube API",
+            message = "Failed to fetch liked YouTube videos",
+            throwable = err,
+            recoveryHint = "Verify youtube.readonly scope is authorized.",
+          )
           _uiState.value =
             _uiState.value.copy(
               isYouTubeLoading = false,
@@ -158,6 +197,12 @@ class GoogleServicesViewModel(
           _uiState.value = _uiState.value.copy(isMapSearching = false, mapPlaces = places)
         }
         .onFailure { err ->
+          AppDiagnosticsLogger.warn(
+            component = "Maps Geocoder",
+            message = "Place search failed for '$query'",
+            rootCause = err.message ?: "Unknown geocoder failure",
+            recoveryHint = "Check internet connectivity and retry.",
+          )
           _uiState.value =
             _uiState.value.copy(
               isMapSearching = false,

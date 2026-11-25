@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MyLocation
@@ -48,6 +49,7 @@ import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -105,6 +107,7 @@ fun ChromeBrowserApp(
   val activeTab = browserState.activeTab
   var addressText by remember(activeTab.id, activeTab.url) { mutableStateOf(activeTab.url) }
   var showClearDataDialog by remember { mutableStateOf(false) }
+  var showHistoryDialog by remember { mutableStateOf(false) }
 
   val animatedProgress by
     animateFloatAsState(
@@ -142,6 +145,12 @@ fun ChromeBrowserApp(
         },
       ) {
         IconButton(
+          onClick = { showHistoryDialog = true },
+          modifier = Modifier.testTag("chrome_history_btn"),
+        ) {
+          Icon(Icons.Rounded.History, contentDescription = "Browsing history")
+        }
+        IconButton(
           onClick = { sessionManager.toggleBookmarkForCurrentPage() },
           modifier = Modifier.testTag("chrome_bookmark_btn"),
         ) {
@@ -158,6 +167,18 @@ fun ChromeBrowserApp(
           Icon(Icons.Rounded.DeleteSweep, contentDescription = "Clear browsing data")
         }
         IconButton(
+          onClick = {
+            sessionManager.openNewTab(
+              url = "https://duckduckgo.com/",
+              title = "Private Tab",
+              isIncognito = true,
+            )
+          },
+          modifier = Modifier.testTag("chrome_incognito_tab_btn"),
+        ) {
+          Icon(Icons.Rounded.VisibilityOff, contentDescription = "New private tab")
+        }
+        IconButton(
           onClick = { sessionManager.openNewTab() },
           modifier = Modifier.testTag("chrome_new_tab_btn"),
         ) {
@@ -167,6 +188,31 @@ fun ChromeBrowserApp(
     }
   ) { padding ->
     Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+      if (activeTab.isIncognito) {
+        Surface(
+          color = MaterialTheme.colorScheme.tertiaryContainer,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(
+              Icons.Rounded.VisibilityOff,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+              tint = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text = "Private Tab — History & site data not saved",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+          }
+        }
+      }
+
       // Tab strip
       LazyRow(
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
@@ -177,6 +223,16 @@ fun ChromeBrowserApp(
           FilterChip(
             selected = index == browserState.activeTabIndex,
             onClick = { sessionManager.selectTab(index) },
+            leadingIcon =
+              if (tab.isIncognito) {
+                {
+                  Icon(
+                    Icons.Rounded.VisibilityOff,
+                    contentDescription = "Private tab",
+                    modifier = Modifier.size(16.dp),
+                  )
+                }
+              } else null,
             label = { Text(tab.title.take(16), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             trailingIcon =
               if (browserState.tabs.size > 1) {
@@ -309,6 +365,62 @@ fun ChromeBrowserApp(
       },
     )
   }
+
+  if (showHistoryDialog) {
+    AlertDialog(
+      onDismissRequest = { showHistoryDialog = false },
+      title = { Text("Browsing History") },
+      text = {
+        if (browserState.history.isEmpty()) {
+          Text(
+            "No visited URLs recorded in this session yet.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        } else {
+          LazyColumn(
+            modifier = Modifier.fillMaxWidth().height(280.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            items(browserState.history) { item ->
+              Card(
+                shape = RoundedCornerShape(12.dp),
+                modifier =
+                  Modifier.fillMaxWidth().clickable {
+                    sessionManager.openOrNavigate(item.url)
+                    showHistoryDialog = false
+                  },
+              ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                  Text(
+                    item.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                  Text(
+                    item.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+              }
+            }
+          }
+        }
+      },
+      confirmButton = {
+        TextButton(onClick = { showHistoryDialog = false }) { Text("Close") }
+      },
+      dismissButton = {
+        if (browserState.history.isNotEmpty()) {
+          TextButton(onClick = { sessionManager.clearHistory() }) { Text("Clear History") }
+        }
+      },
+    )
+  }
 }
 
 // --- 10. UNIFIED SEARCH APP ---
@@ -318,11 +430,26 @@ fun SearchApp(
   notesState: UiState<List<VirtualNote>>,
   contactsState: UiState<List<VirtualContact>>,
   filesState: UiState<List<VirtualFileRecord>>,
+  searchHistory: List<String> = emptyList(),
+  onRecordSearch: (String) -> Unit = {},
+  onClearSearchHistory: () -> Unit = {},
   onLaunchApp: (VirtualAppId) -> Unit,
   onSearchWeb: (String) -> Unit,
   onCloseApp: () -> Unit,
 ) {
   var query by remember(initialQuery) { mutableStateOf(initialQuery) }
+  var selectedCategory by remember { mutableStateOf("All") }
+  val categories = remember { listOf("All", "Web", "Images", "Videos", "News") }
+
+  fun buildSearchUrl(q: String, category: String): String {
+    val encoded = URLEncoder.encode(q, "UTF-8")
+    return when (category) {
+      "Images" -> "https://duckduckgo.com/?q=$encoded&ia=images&iax=images"
+      "Videos" -> "https://duckduckgo.com/?q=$encoded&ia=videos&iax=videos"
+      "News" -> "https://duckduckgo.com/?q=$encoded&ia=news&iar=news"
+      else -> "https://duckduckgo.com/?q=$encoded"
+    }
+  }
 
   val matchingApps =
     remember(query) {
@@ -368,31 +495,66 @@ fun SearchApp(
           KeyboardActions(
             onSearch = {
               if (query.isNotBlank()) {
-                onSearchWeb("https://duckduckgo.com/?q=${URLEncoder.encode(query, "UTF-8")}")
+                onRecordSearch(query)
+                onSearchWeb(buildSearchUrl(query, selectedCategory))
               }
             }
           ),
         modifier = Modifier.fillMaxWidth().testTag("unified_search_input"),
       )
 
+      Spacer(modifier = Modifier.height(8.dp))
+      LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(categories) { cat ->
+          FilterChip(
+            selected = selectedCategory == cat,
+            onClick = { selectedCategory = cat },
+            label = { Text(cat) },
+          )
+        }
+      }
+
+      if (searchHistory.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Text("Recent Searches", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          TextButton(onClick = onClearSearchHistory) { Text("Clear") }
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          items(searchHistory) { past ->
+            FilterChip(
+              selected = false,
+              onClick = { query = past },
+              leadingIcon = { Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(16.dp)) },
+              label = { Text(past, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            )
+          }
+        }
+      }
+
       if (query.isNotBlank()) {
         Spacer(modifier = Modifier.height(10.dp))
         Button(
           onClick = {
-            onSearchWeb("https://duckduckgo.com/?q=${URLEncoder.encode(query, "UTF-8")}")
+            onRecordSearch(query)
+            onSearchWeb(buildSearchUrl(query, selectedCategory))
           },
           shape = RoundedCornerShape(18.dp),
           modifier = Modifier.fillMaxWidth(),
         ) {
           Icon(Icons.Rounded.Language, contentDescription = null)
           Spacer(modifier = Modifier.width(8.dp))
-          Text("Search \"$query\" in Chrome")
+          Text("Search \"$query\" ($selectedCategory) in Chrome")
         }
       }
 
       Spacer(modifier = Modifier.height(14.dp))
       LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (matchingContacts.isNotEmpty()) {
+        if (selectedCategory == "All" && matchingContacts.isNotEmpty()) {
           item { Text("Contacts", style = MaterialTheme.typography.labelLarge) }
           items(matchingContacts) { c ->
             Card(modifier = Modifier.fillMaxWidth().clickable { onLaunchApp(VirtualAppId.CONTACTS) }) {

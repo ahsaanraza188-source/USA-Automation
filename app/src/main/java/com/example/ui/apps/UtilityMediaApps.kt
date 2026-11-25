@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.rounded.Backspace
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Alarm
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Cameraswitch
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FolderOpen
@@ -90,18 +91,17 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
+import com.example.data.model.DevicePreferences
 import com.example.data.model.VirtualAlarm
 import com.example.data.model.VirtualFileRecord
 import com.example.domain.CalculatorEngine
-import com.example.domain.VirtualAppCatalog
+import com.example.domain.RegionalCatalog
+import com.example.domain.RegionalFormatter
 import com.example.ui.shell.UiState
 import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.MonoCodeStyle
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 import kotlinx.coroutines.delay
 
 // --- 5. CALCULATOR APP ---
@@ -142,10 +142,14 @@ fun CalculatorApp(onCloseApp: () -> Unit) {
       Column(modifier = Modifier.fillMaxWidth()) {
         if (history.isNotEmpty()) {
           LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(history.take(5)) { entry ->
+            items(history.take(8)) { entry ->
               Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier =
+                  Modifier.clip(RoundedCornerShape(12.dp)).clickable {
+                    expression = entry.substringAfter(" = ").trim()
+                  },
               ) {
                 Text(
                   text = entry,
@@ -176,14 +180,34 @@ fun CalculatorApp(onCloseApp: () -> Unit) {
               modifier = Modifier.fillMaxWidth().testTag("calc_expression"),
             )
             Spacer(modifier = Modifier.height(6.dp))
-            Text(
-              text = "= $resultPreview",
-              style = MaterialTheme.typography.displaySmall.copy(fontFamily = JetBrainsMonoFamily),
-              color = MaterialTheme.colorScheme.primary,
-              textAlign = TextAlign.End,
-              maxLines = 1,
-              modifier = Modifier.fillMaxWidth().testTag("calc_result"),
-            )
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              OutlinedButton(
+                onClick = {
+                  expression =
+                    when {
+                      expression.isBlank() -> "-"
+                      expression.startsWith("-") -> expression.drop(1)
+                      else -> "-($expression)"
+                    }
+                },
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+              ) {
+                Text("+/-", style = MonoCodeStyle)
+              }
+              Text(
+                text = "= $resultPreview",
+                style = MaterialTheme.typography.displaySmall.copy(fontFamily = JetBrainsMonoFamily),
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                modifier = Modifier.weight(1f).testTag("calc_result"),
+              )
+            }
           }
         }
       }
@@ -193,6 +217,7 @@ fun CalculatorApp(onCloseApp: () -> Unit) {
           val sciRows =
             listOf(
               listOf("sin(", "cos(", "tan(", if (useDegrees) "DEG" else "RAD"),
+              listOf("asin(", "acos(", "atan(", "!"),
               listOf("sqrt(", "log(", "ln(", "^"),
               listOf("π", "e", "(", ")"),
             )
@@ -207,8 +232,8 @@ fun CalculatorApp(onCloseApp: () -> Unit) {
                     if (token == "DEG" || token == "RAD") useDegrees = !useDegrees
                     else expression += token
                   },
-                  modifier = Modifier.weight(1f).height(44.dp),
-                  shape = RoundedCornerShape(14.dp),
+                  modifier = Modifier.weight(1f).height(40.dp),
+                  shape = RoundedCornerShape(12.dp),
                   contentPadding = PaddingValues(0.dp),
                 ) {
                   Text(token, style = MonoCodeStyle)
@@ -305,7 +330,7 @@ fun CalculatorApp(onCloseApp: () -> Unit) {
 @Composable
 fun ClockApp(
   alarmsState: UiState<List<VirtualAlarm>>,
-  usTimezoneId: String,
+  preferences: DevicePreferences = DevicePreferences(),
   onSaveAlarm: (VirtualAlarm) -> Unit,
   onDeleteAlarm: (String) -> Unit,
   onCloseApp: () -> Unit,
@@ -317,6 +342,7 @@ fun ClockApp(
   // Timer state
   var timerRemainingSec by remember { mutableLongStateOf(300L) }
   var timerRunning by remember { mutableStateOf(false) }
+  var timerCompleted by remember { mutableStateOf(false) }
 
   // Stopwatch state
   var swElapsedMs by remember { mutableLongStateOf(0L) }
@@ -333,7 +359,10 @@ fun ClockApp(
     while (timerRunning && timerRemainingSec > 0) {
       delay(1000L)
       timerRemainingSec -= 1L
-      if (timerRemainingSec == 0L) timerRunning = false
+      if (timerRemainingSec == 0L) {
+        timerRunning = false
+        timerCompleted = true
+      }
     }
   }
   LaunchedEffect(swRunning) {
@@ -344,7 +373,15 @@ fun ClockApp(
   }
 
   Scaffold(
-    topBar = { VirtualAppTopBar("Clock", "US World Time & Alarms", onBack = onCloseApp) },
+    topBar = {
+      VirtualAppTopBar(
+        title = "Clock",
+        subtitle =
+          "${RegionalFormatter.shortTimezoneCode(preferences.usTimezoneId)} • " +
+            if (preferences.use24HourTime) "24-hour" else "12-hour",
+        onBack = onCloseApp,
+      )
+    },
     floatingActionButton = {
       if (selectedTab == 1) {
         FloatingActionButton(onClick = { showAddAlarm = true }) {
@@ -366,15 +403,20 @@ fun ClockApp(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            items(VirtualAppCatalog.usTimezones) { tz ->
-              val dateFormatted = remember(nowMillis, tz.zoneId) {
-                val timeZone = TimeZone.getTimeZone(tz.zoneId)
-                val dateFmt = SimpleDateFormat("EEE, MMM d • z", Locale.US).apply { this.timeZone = timeZone }
-                val timeFmt = SimpleDateFormat("h:mm:ss a", Locale.US).apply { this.timeZone = timeZone }
-                val nowDate = Date(nowMillis)
-                dateFmt.format(nowDate) to timeFmt.format(nowDate)
+            items(RegionalCatalog.allTimezones, key = { it.zoneId }) { tz ->
+              val zonePrefs = remember(preferences, tz.zoneId) { preferences.copy(usTimezoneId = tz.zoneId) }
+              val dateFormatted = remember(nowMillis, zonePrefs) {
+                RegionalFormatter.formatHomeAtAGlanceDate(nowMillis, zonePrefs)
               }
-              val isActive = tz.zoneId == usTimezoneId
+              val timeFormatted = remember(nowMillis, zonePrefs) {
+                RegionalFormatter.formatTimeWithSeconds(
+                  epochMillis = nowMillis,
+                  zoneId = tz.zoneId,
+                  use24Hour = preferences.use24HourTime,
+                  localeTag = preferences.localeTag,
+                )
+              }
+              val isActive = tz.zoneId == preferences.usTimezoneId
               Card(
                 shape = RoundedCornerShape(20.dp),
                 colors =
@@ -389,15 +431,15 @@ fun ClockApp(
                   horizontalArrangement = Arrangement.SpaceBetween,
                   verticalAlignment = Alignment.CenterVertically,
                 ) {
-                  Column {
+                  Column(modifier = Modifier.weight(1f)) {
                     Text(tz.cityLabel, style = MaterialTheme.typography.titleMedium)
                     Text(
-                      text = dateFormatted.first,
+                      text = dateFormatted,
                       style = MaterialTheme.typography.bodyMedium,
                     )
                   }
                   Text(
-                    text = dateFormatted.second,
+                    text = timeFormatted,
                     style = MaterialTheme.typography.titleLarge.copy(fontFamily = JetBrainsMonoFamily),
                   )
                 }
@@ -418,7 +460,19 @@ fun ClockApp(
                   verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                   items(alarmsState.data, key = { it.id }) { alarm ->
-                    val timeStr = String.format("%02d:%02d", alarm.hour, alarm.minute)
+                    val timeStr =
+                      if (preferences.use24HourTime) {
+                        String.format(Locale.US, "%02d:%02d", alarm.hour, alarm.minute)
+                      } else {
+                        val h = alarm.hour.toInt()
+                        val amPm = if (h < 12) "AM" else "PM"
+                        val h12 = when {
+                          h == 0 -> 12
+                          h > 12 -> h - 12
+                          else -> h
+                        }
+                        String.format(Locale.US, "%d:%02d %s", h12, alarm.minute, amPm)
+                      }
                     Card(shape = RoundedCornerShape(20.dp)) {
                       Row(
                         modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -464,27 +518,72 @@ fun ClockApp(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
           ) {
+            if (timerCompleted) {
+              Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.padding(bottom = 12.dp),
+              ) {
+                Text(
+                  text = "Timer Finished!",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = MaterialTheme.colorScheme.onPrimaryContainer,
+                  modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+              }
+            }
             Text(
-              text = String.format("%02d:%02d", mins, secs),
+              text = String.format(Locale.US, "%02d:%02d", mins, secs),
               style = MaterialTheme.typography.displayLarge.copy(fontFamily = JetBrainsMonoFamily),
               color = MaterialTheme.colorScheme.primary,
             )
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
               listOf(60L to "1m", 300L to "5m", 600L to "10m").forEach { (sec, label) ->
                 FilterChip(
                   selected = false,
                   onClick = {
                     timerRunning = false
+                    timerCompleted = false
                     timerRemainingSec = sec
                   },
                   label = { Text(label) },
                 )
               }
             }
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              OutlinedButton(
+                onClick = {
+                  timerCompleted = false
+                  timerRemainingSec = (timerRemainingSec - 15L).coerceAtLeast(15L)
+                },
+                shape = RoundedCornerShape(14.dp),
+              ) { Text("-15s") }
+              OutlinedButton(
+                onClick = {
+                  timerCompleted = false
+                  timerRemainingSec += 15L
+                },
+                shape = RoundedCornerShape(14.dp),
+              ) { Text("+15s") }
+              OutlinedButton(
+                onClick = {
+                  timerCompleted = false
+                  timerRemainingSec += 60L
+                },
+                shape = RoundedCornerShape(14.dp),
+              ) { Text("+1m") }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-              Button(onClick = { timerRunning = !timerRunning }) {
+              Button(
+                onClick = {
+                  if (timerRemainingSec == 0L) timerRemainingSec = 60L
+                  timerCompleted = false
+                  timerRunning = !timerRunning
+                }
+              ) {
                 Icon(if (timerRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(if (timerRunning) "Pause" else "Start")
@@ -492,6 +591,7 @@ fun ClockApp(
               OutlinedButton(
                 onClick = {
                   timerRunning = false
+                  timerCompleted = false
                   timerRemainingSec = 300L
                 }
               ) {
@@ -746,17 +846,67 @@ fun FilesApp(
   }
 
   previewFile?.let { file ->
+    var renameDraft by remember(file.id) { mutableStateOf(file.name) }
+    var folderDraft by remember(file.id) { mutableStateOf(file.folder) }
     AlertDialog(
       onDismissRequest = { previewFile = null },
       title = { Text(file.name) },
       text = {
-        Column {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
           Text("${file.mimeType} • ${file.sizeBytes} bytes", style = MonoCodeStyle)
-          Spacer(modifier = Modifier.height(8.dp))
-          Text(file.contentPreview.ifBlank { file.localPath }, style = MaterialTheme.typography.bodyMedium)
+          Text(
+            file.contentPreview.ifBlank { file.localPath },
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+          )
+          OutlinedTextField(
+            value = renameDraft,
+            onValueChange = { renameDraft = it },
+            label = { Text("Rename File") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+          )
+          Text("Move to Folder", style = MaterialTheme.typography.labelMedium)
+          LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(listOf("Documents", "Downloads", "Pictures", "System")) { targetFolder ->
+              FilterChip(
+                selected = folderDraft == targetFolder,
+                onClick = { folderDraft = targetFolder },
+                label = { Text(targetFolder) },
+              )
+            }
+          }
         }
       },
-      confirmButton = { TextButton(onClick = { previewFile = null }) { Text("Close") } },
+      confirmButton = {
+        Button(
+          onClick = {
+            onSaveFile(
+              file.copy(
+                name = renameDraft.trim().ifBlank { file.name },
+                folder = folderDraft,
+              )
+            )
+            previewFile = null
+          }
+        ) {
+          Text("Save")
+        }
+      },
+      dismissButton = {
+        Row {
+          TextButton(
+            onClick = {
+              onDeleteFile(file.id)
+              previewFile = null
+            }
+          ) {
+            Text("Delete")
+          }
+          TextButton(onClick = { previewFile = null }) { Text("Close") }
+        }
+      },
     )
   }
 }
@@ -771,6 +921,7 @@ fun CameraGalleryApp(onCloseApp: () -> Unit) {
   var selectedTab by remember { mutableIntStateOf(0) }
   var viewingPhoto by remember { mutableStateOf<String?>(null) }
   var captureMessage by remember { mutableStateOf<String?>(null) }
+  var useFrontCamera by remember { mutableStateOf(false) }
 
   var hasCameraPerm by remember {
     mutableStateOf(
@@ -851,9 +1002,12 @@ fun CameraGalleryApp(onCloseApp: () -> Unit) {
         } else {
           Box(modifier = Modifier.fillMaxSize()) {
             val previewView = remember { PreviewView(context) }
-            DisposableEffect(lifecycleOwner) {
+            DisposableEffect(lifecycleOwner, useFrontCamera) {
               val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
               val executor = ContextCompat.getMainExecutor(context)
+              val selector =
+                if (useFrontCamera) CameraSelector.DEFAULT_FRONT_CAMERA
+                else CameraSelector.DEFAULT_BACK_CAMERA
               cameraProviderFuture.addListener(
                 {
                   runCatching {
@@ -863,7 +1017,7 @@ fun CameraGalleryApp(onCloseApp: () -> Unit) {
                     provider.unbindAll()
                     provider.bindToLifecycle(
                       lifecycleOwner,
-                      CameraSelector.DEFAULT_BACK_CAMERA,
+                      selector,
                       preview,
                       imageCapture,
                     )
@@ -885,6 +1039,25 @@ fun CameraGalleryApp(onCloseApp: () -> Unit) {
                 modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
               ) {
                 Text(captureMessage!!, modifier = Modifier.padding(10.dp))
+              }
+            }
+
+            Surface(
+              shape = CircleShape,
+              color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+              modifier =
+                Modifier.align(Alignment.BottomEnd)
+                  .padding(end = 24.dp, bottom = 32.dp)
+                  .size(52.dp)
+                  .clip(CircleShape)
+                  .clickable { useFrontCamera = !useFrontCamera },
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  Icons.Rounded.Cameraswitch,
+                  contentDescription = "Switch front/back camera",
+                  tint = MaterialTheme.colorScheme.onSurface,
+                )
               }
             }
 

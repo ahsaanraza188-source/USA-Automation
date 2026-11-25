@@ -351,6 +351,7 @@ fun VirtualOsRoot(
   val filesState by shellViewModel.filesState.collectAsStateWithLifecycle()
 
   val diagState by diagnosticsViewModel.uiState.collectAsStateWithLifecycle()
+  val diagLogs by diagnosticsViewModel.logs.collectAsStateWithLifecycle()
   val tokenState by googleServicesViewModel.tokenState.collectAsStateWithLifecycle()
   val googleState by googleServicesViewModel.uiState.collectAsStateWithLifecycle()
 
@@ -359,11 +360,11 @@ fun VirtualOsRoot(
       runCatching { OsPaletteKey.valueOf(preferences.themePalette) }.getOrDefault(OsPaletteKey.COBALT)
     }
 
-  val usTime = remember(clockTick, preferences.usTimezoneId) {
-    shellViewModel.formatUsTime(preferences.usTimezoneId)
+  val usTime = remember(clockTick, preferences) {
+    shellViewModel.formatRegionalTime(preferences)
   }
-  val usDate = remember(clockTick, preferences.usTimezoneId) {
-    shellViewModel.formatUsDate(preferences.usTimezoneId)
+  val usDate = remember(clockTick, preferences) {
+    shellViewModel.formatRegionalDate(preferences)
   }
 
   val nextEvent =
@@ -504,6 +505,7 @@ fun VirtualOsRoot(
                     paletteKey = paletteKey,
                     dateFormatted = usDate,
                     timeFormatted = usTime,
+                    preferences = preferences,
                     nextEvent = nextEvent,
                     ipReport = diagState.ipReport,
                     pinnedAppIds = preferences.pinnedAppIds,
@@ -520,6 +522,9 @@ fun VirtualOsRoot(
                     notesState = notesState,
                     contactsState = contactsState,
                     filesState = filesState,
+                    searchHistory = shellState.searchHistory,
+                    onRecordSearch = shellViewModel::recordSearchQuery,
+                    onClearSearchHistory = shellViewModel::clearSearchHistory,
                     onLaunchApp = shellViewModel::launchApp,
                     onSearchWeb = shellViewModel::openUrlInChrome,
                     onCloseApp = shellViewModel::goHome,
@@ -530,8 +535,11 @@ fun VirtualOsRoot(
                     tokenState = tokenState,
                     googleState = googleState,
                     onConnectOAuth = { googleServicesViewModel.connectOAuth(preferences.oauthClientId) },
-                    onRefreshInbox = googleServicesViewModel::refreshGmail,
+                    onRefreshFolder = googleServicesViewModel::refreshGmail,
                     onSendEmail = googleServicesViewModel::sendGmail,
+                    onCreateGoogleAccountInBrowser = {
+                      shellViewModel.openUrlInChrome("https://accounts.google.com/signup")
+                    },
                     onOpenSettings = { shellViewModel.launchApp(VirtualAppId.SETTINGS) },
                     onCloseApp = shellViewModel::goHome,
                   )
@@ -544,6 +552,9 @@ fun VirtualOsRoot(
                     onSearchYouTube = googleServicesViewModel::searchYouTube,
                     onLoadLiked = googleServicesViewModel::loadLikedYouTube,
                     onOpenVideoInBrowser = shellViewModel::openUrlInChrome,
+                    onCreateGoogleAccountInBrowser = {
+                      shellViewModel.openUrlInChrome("https://accounts.google.com/signup")
+                    },
                     onOpenSettings = { shellViewModel.launchApp(VirtualAppId.SETTINGS) },
                     onCloseApp = shellViewModel::goHome,
                   )
@@ -566,6 +577,7 @@ fun VirtualOsRoot(
                     threadsState = threadsState,
                     activeThreadId = shellState.activeThreadId,
                     activeMessages = activeMessages,
+                    contactsState = contactsState,
                     onSelectThread = shellViewModel::setActiveThread,
                     onCreateThread = shellViewModel::createThread,
                     onSendMessage = shellViewModel::sendMessage,
@@ -583,7 +595,7 @@ fun VirtualOsRoot(
                 VirtualAppId.CLOCK ->
                   ClockApp(
                     alarmsState = alarmsState,
-                    usTimezoneId = preferences.usTimezoneId,
+                    preferences = preferences,
                     onSaveAlarm = shellViewModel::saveAlarm,
                     onDeleteAlarm = shellViewModel::deleteAlarm,
                     onCloseApp = shellViewModel::goHome,
@@ -591,7 +603,7 @@ fun VirtualOsRoot(
                 VirtualAppId.CALENDAR ->
                   CalendarApp(
                     eventsState = eventsState,
-                    usTimezoneId = preferences.usTimezoneId,
+                    preferences = preferences,
                     onSaveEvent = shellViewModel::saveEvent,
                     onDeleteEvent = shellViewModel::deleteEvent,
                     onCloseApp = shellViewModel::goHome,
@@ -615,12 +627,16 @@ fun VirtualOsRoot(
                   SettingsApp(
                     userEmail = userEmail,
                     userName = userName,
+                    isCloudSignedIn = isCloudSignedIn,
                     preferences = preferences,
                     tokenState = tokenState,
                     googleFeedback = googleState.oauthFeedback,
                     onUpdatePreferences = shellViewModel::updatePreferences,
                     onConnectOAuth = { googleServicesViewModel.connectOAuth(preferences.oauthClientId) },
                     onDisconnectOAuth = googleServicesViewModel::disconnectOAuth,
+                    onCreateGoogleAccountInBrowser = {
+                      shellViewModel.openUrlInChrome("https://accounts.google.com/signup")
+                    },
                     onSignOut = onSignOut,
                     onOpenDiagnostics = { shellViewModel.launchApp(VirtualAppId.DIAGNOSTICS) },
                     onCloseApp = shellViewModel::goHome,
@@ -628,14 +644,13 @@ fun VirtualOsRoot(
                 VirtualAppId.DIAGNOSTICS ->
                   DiagnosticsApp(
                     diagState = diagState,
-                    usTimezoneId = preferences.usTimezoneId,
-                    oauthClientId = preferences.oauthClientId,
-                    oauthConnected = tokenState.isConnected,
-                    isSignedIn = isCloudSignedIn,
-                    onRefreshIp = diagnosticsViewModel::refreshPublicIp,
+                    logs = diagLogs,
+                    preferences = preferences,
+                    onRefreshIp = diagnosticsViewModel::refreshNetworkDiagnostics,
+                    onRefreshGeolocation = diagnosticsViewModel::refreshGeolocationAndTelemetry,
                     onRunFifteenTests = { hasCam ->
                       diagnosticsViewModel.runFifteenTests(
-                        usTimezoneId = preferences.usTimezoneId,
+                        preferences = preferences,
                         oauthClientId = preferences.oauthClientId,
                         oauthConnected = tokenState.isConnected,
                         isSignedIn = isCloudSignedIn,
@@ -643,6 +658,8 @@ fun VirtualOsRoot(
                         hasCameraHardware = hasCam,
                       )
                     },
+                    onOpenSettings = { shellViewModel.launchApp(VirtualAppId.SETTINGS) },
+                    onClearLogs = diagnosticsViewModel::clearLogs,
                     onCloseApp = shellViewModel::goHome,
                   )
               }
@@ -697,6 +714,7 @@ fun VirtualOsRoot(
           visible = shellState.isShadeOpen,
           dateFormatted = usDate,
           shellState = shellState,
+          preferences = preferences,
           darkMode = preferences.darkMode,
           paletteKey = paletteKey,
           ipReport = diagState.ipReport,

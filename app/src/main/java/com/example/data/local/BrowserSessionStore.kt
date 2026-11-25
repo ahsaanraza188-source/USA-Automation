@@ -15,6 +15,7 @@ data class PersistedBrowserTab(
   val id: Int,
   val title: String,
   val url: String,
+  val isIncognito: Boolean = false,
 )
 
 data class BrowserBookmark(

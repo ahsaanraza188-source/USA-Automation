@@ -16,6 +16,10 @@ class CalculatorEngineTest {
   fun evaluatesScientificFunctionsAndConstants() {
     assertEquals("12", CalculatorEngine.evaluate("sqrt(144)").getOrNull())
     assertEquals("0.5", CalculatorEngine.evaluate("sin(30)", useDegrees = true).getOrNull())
+    assertEquals("30", CalculatorEngine.evaluate("asin(0.5)", useDegrees = true).getOrNull())
+    assertEquals("60", CalculatorEngine.evaluate("acos(0.5)", useDegrees = true).getOrNull())
+    assertEquals("45", CalculatorEngine.evaluate("atan(1)", useDegrees = true).getOrNull())
+    assertEquals("120", CalculatorEngine.evaluate("5!").getOrNull())
     assertEquals("1", CalculatorEngine.evaluate("ln(e)").getOrNull())
     assertEquals("2", CalculatorEngine.evaluate("log(100)").getOrNull())
   }

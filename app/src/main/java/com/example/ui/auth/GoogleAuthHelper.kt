@@ -12,6 +12,7 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
+import com.example.data.network.AppDiagnosticsLogger
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -172,6 +173,12 @@ object GoogleAuthHelper {
         if (looksLikeConfigRejection) {
           val sha1 = getSigningSha1(context)
           val shaNote = if (sha1 != null) "\nAPK SHA-1: $sha1" else ""
+          AppDiagnosticsLogger.warn(
+            component = "Google Auth",
+            message = "Credential Manager rejected APK signature ($detail)",
+            rootCause = sha1?.let { "APK SHA-1: $it" } ?: detail,
+            recoveryHint = "Use Browser Google Sign-In or Continue Without Gmail (Local Mode).",
+          )
           onAuthError("Google Play Services could not verify this APK ($detail). Use Browser Google Sign-In below.$shaNote")
         } else {
           onAuthCancelled()
@@ -181,6 +188,12 @@ object GoogleAuthHelper {
         val sha1 = getSigningSha1(context)
         val shaNote = if (sha1 != null) "\nAPK SHA-1: $sha1" else ""
         val msg = e.localizedMessage ?: context.getString(R.string.auth_error_generic)
+        AppDiagnosticsLogger.error(
+          component = "Google Auth",
+          message = "Google Sign-In failed",
+          throwable = e,
+          recoveryHint = "Try Browser Google Sign-In or Local Mode.",
+        )
         onAuthError("$msg$shaNote")
       }
     }
@@ -218,6 +231,12 @@ object GoogleAuthHelper {
         }
       } catch (e: Exception) {
         Log.e(TAG, "Browser Google Sign-In fallback failed", e)
+        AppDiagnosticsLogger.error(
+          component = "Google Auth",
+          message = "Browser Google Sign-In fallback failed",
+          throwable = e,
+          recoveryHint = "Ensure SHA-1 matches Firebase or use Local Mode without Gmail.",
+        )
         onAuthError(e.localizedMessage ?: context.getString(R.string.auth_error_generic))
       }
     }

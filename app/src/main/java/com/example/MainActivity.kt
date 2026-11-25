@@ -2,8 +2,10 @@ package com.example
 
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
@@ -16,22 +18,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -47,7 +41,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.Lifecycle
@@ -58,10 +51,12 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.local.LocalVirtualOsDataSource
 import com.example.data.local.OAuthTokenStore
 import com.example.data.network.DiagnosticsNetworkService
 import com.example.data.network.GoogleApisClient
 import com.example.data.network.GoogleOAuthManager
+import com.example.data.repository.VirtualOsDataSource
 import com.example.data.repository.VirtualOsRepository
 import com.example.domain.VirtualAppId
 import com.example.ui.auth.GoogleAuthHelper
@@ -155,74 +150,119 @@ fun AppNavigation(
   auth: FirebaseAuth? = null,
 ) {
   val context = LocalContext.current
+  val appContext = context.applicationContext
+  val scope = rememberCoroutineScope()
+  val credentialManager = remember(context) { CredentialManager.create(context) }
+  val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+  val localDataSource = remember(appContext) { LocalVirtualOsDataSource(appContext) }
+  val isLocalGuestMode by
+    localDataSource.isLocalGuestModeFlow.collectAsStateWithLifecycle(initialValue = false)
+
   val isFirebaseConfigured =
     remember(context, auth) {
       auth != null ||
         FirebaseApp.getApps(context).isNotEmpty() ||
         FirebaseApp.initializeApp(context) != null
     }
-  if (!isFirebaseConfigured) {
-    UsaVirtualOsTheme {
-      FirebaseConfigMissingScreen()
-    }
-    return
-  }
 
-  val resolvedAuth = remember(auth) { auth ?: Firebase.auth }
-  val currentUser by
-    resolvedAuth.authStateFlow().collectAsStateWithLifecycle(initialValue = resolvedAuth.currentUser)
-
-  if (currentUser == null) {
-    UsaVirtualOsTheme {
-      LockAuthScreen(onAuthSuccess = {})
+  val currentUser: FirebaseUser? =
+    if (isFirebaseConfigured) {
+      val resolvedAuth = remember(auth) { auth ?: Firebase.auth }
+      val userState by
+        resolvedAuth
+          .authStateFlow()
+          .collectAsStateWithLifecycle(initialValue = resolvedAuth.currentUser)
+      userState
+    } else {
+      null
     }
-  } else {
-    val user = currentUser!!
-    key(user.uid) {
-      VirtualOsRoot(
-        currentUserId = user.uid,
-        userEmail = user.email,
-        userName = user.displayName,
-        oauthTokenStore = oauthTokenStore,
-        oauthManager = oauthManager,
-      )
-    }
-  }
-}
 
-@Composable
-private fun FirebaseConfigMissingScreen() {
-  Surface(
-    modifier = Modifier.fillMaxSize(),
-    color = MaterialTheme.colorScheme.background,
-  ) {
-    Box(
-      modifier = Modifier.fillMaxSize().padding(24.dp),
-      contentAlignment = Alignment.Center,
-    ) {
-      Card(modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp)) {
-        Column(
-          modifier = Modifier.padding(20.dp),
-          verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-          Text(
-            text = "Firebase Setup Required",
-            style = MaterialTheme.typography.titleLarge,
-          )
-          Text(
-            text =
-              "This build is missing app/google-services.json, so Google Sign-In and Firestore cloud sync cannot initialize.",
-            style = MaterialTheme.typography.bodyMedium,
-          )
-          Spacer(modifier = Modifier.height(4.dp))
-          Text(
-            text =
-              "To enable sign-in in GitHub Actions builds, copy app/google-services.json from AI Studio into a GitHub repository secret named GOOGLE_SERVICES_JSON (and optionally debug.keystore.base64 into DEBUG_KEYSTORE_BASE64), then re-run Build Android APK.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
+  var virtualBackHandler by remember { mutableStateOf<(() -> Unit)?>(null) }
+  var virtualHomeHandler by remember { mutableStateOf<(() -> Unit)?>(null) }
+  var virtualStatusHandler by remember { mutableStateOf<((String) -> Unit)?>(null) }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    if (currentUser == null && !isLocalGuestMode) {
+      DisposableEffect(Unit) {
+        virtualBackHandler = null
+        virtualHomeHandler = null
+        virtualStatusHandler = null
+        onDispose {}
       }
+      UsaVirtualOsTheme {
+        LockAuthScreen(
+          isFirebaseConfigured = isFirebaseConfigured,
+          onAuthSuccess = {},
+          onContinueWithoutGmail = {
+            scope.launch { localDataSource.setLocalGuestMode(true) }
+          },
+        )
+      }
+    } else {
+      val isCloudSignedIn = currentUser != null
+      val activeUid = currentUser?.uid ?: LocalVirtualOsDataSource.LOCAL_UID
+      val activeEmail = currentUser?.email ?: "Local Device Mode (No Gmail)"
+      val activeName = currentUser?.displayName ?: "Local User"
+
+      key(activeUid, isCloudSignedIn) {
+        val activeDataSource: VirtualOsDataSource =
+          remember(activeUid, isCloudSignedIn) {
+            if (isCloudSignedIn) {
+              val dbId = appContext.getString(R.string.firestore_database_id)
+              VirtualOsRepository(FirebaseFirestore.getInstance(dbId))
+            } else {
+              localDataSource
+            }
+          }
+
+        VirtualOsRoot(
+          currentUserId = activeUid,
+          userEmail = activeEmail,
+          userName = activeName,
+          isCloudSignedIn = isCloudSignedIn,
+          dataSource = activeDataSource,
+          oauthTokenStore = oauthTokenStore,
+          oauthManager = oauthManager,
+          onSignOut = {
+            if (isCloudSignedIn) {
+              GoogleAuthHelper.signOut(credentialManager, scope)
+            } else {
+              scope.launch { localDataSource.setLocalGuestMode(false) }
+            }
+          },
+          onRegisterFloatingActions = { onBack, onHome, onStatus ->
+            virtualBackHandler = onBack
+            virtualHomeHandler = onHome
+            virtualStatusHandler = onStatus
+          },
+        )
+      }
+    }
+
+    UsaVirtualOsTheme {
+      FloatingControlPill(
+        onBack = {
+          val handler = virtualBackHandler
+          if (handler != null) handler() else backDispatcher?.onBackPressed()
+        },
+        onHome = {
+          val handler = virtualHomeHandler
+          if (handler != null) {
+            handler()
+          } else {
+            scope.launch { localDataSource.setLocalGuestMode(true) }
+          }
+        },
+        onStatusMessage = { msg ->
+          val handler = virtualStatusHandler
+          if (handler != null) {
+            handler(msg)
+          } else {
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+          }
+        },
+        modifier = Modifier.align(Alignment.CenterEnd).zIndex(50f),
+      )
     }
   }
 }
@@ -232,25 +272,25 @@ fun VirtualOsRoot(
   currentUserId: String,
   userEmail: String?,
   userName: String?,
+  isCloudSignedIn: Boolean,
+  dataSource: VirtualOsDataSource,
   oauthTokenStore: OAuthTokenStore,
   oauthManager: GoogleOAuthManager,
+  onSignOut: () -> Unit,
+  onRegisterFloatingActions: (onBack: () -> Unit, onHome: () -> Unit, onStatus: (String) -> Unit) -> Unit,
 ) {
   val context = LocalContext.current
   val appContext = context.applicationContext
   val lifecycleOwner = LocalLifecycleOwner.current
-  val scope = rememberCoroutineScope()
-  val credentialManager = remember(context) { CredentialManager.create(context) }
   val saveableStateHolder = rememberSaveableStateHolder()
 
   val browserSessionManager: BrowserSessionManager =
     viewModel(
-      key = "browser_$currentUserId",
+      key = "browser_${currentUserId}_$isCloudSignedIn",
       factory =
         viewModelFactory {
           initializer {
-            val dbId = appContext.getString(R.string.firestore_database_id)
-            val db = FirebaseFirestore.getInstance(dbId)
-            BrowserSessionManager(appContext, currentUserId, VirtualOsRepository(db))
+            BrowserSessionManager(appContext, currentUserId, dataSource)
           }
         },
     )
@@ -270,13 +310,11 @@ fun VirtualOsRoot(
 
   val shellViewModel: OsShellViewModel =
     viewModel(
-      key = currentUserId,
+      key = "shell_${currentUserId}_$isCloudSignedIn",
       factory =
         viewModelFactory {
           initializer {
-            val dbId = appContext.getString(R.string.firestore_database_id)
-            val db = FirebaseFirestore.getInstance(dbId)
-            OsShellViewModel(VirtualOsRepository(db), currentUserId)
+            OsShellViewModel(dataSource, currentUserId)
           }
         },
     )
@@ -340,19 +378,32 @@ fun VirtualOsRoot(
   }
 
   val handleBackAction: () -> Unit = {
+    val latest = shellViewModel.shellState.value
     val isChromeForeground =
-      shellState.activeApp == VirtualAppId.CHROME &&
-        !shellState.isShadeOpen &&
-        !shellState.isRecentsOpen &&
-        !shellState.isDrawerOpen
+      latest.activeApp == VirtualAppId.CHROME &&
+        !latest.isShadeOpen &&
+        !latest.isRecentsOpen &&
+        !latest.isDrawerOpen
     if (isChromeForeground && browserSessionManager.goBackInActiveTab()) {
       // Handled inside active Chrome tab history
     } else {
-      if (shellState.activeApp == VirtualAppId.CHROME) {
+      if (latest.activeApp == VirtualAppId.CHROME) {
         browserSessionManager.persistImmediately()
       }
       shellViewModel.handleVirtualBack()
     }
+  }
+
+  val handleHomeAction: () -> Unit = {
+    if (shellViewModel.shellState.value.activeApp == VirtualAppId.CHROME) {
+      browserSessionManager.persistImmediately()
+    }
+    shellViewModel.goHome()
+  }
+
+  DisposableEffect(shellViewModel, browserSessionManager) {
+    onRegisterFloatingActions(handleBackAction, handleHomeAction, shellViewModel::showStatus)
+    onDispose {}
   }
 
   BackHandler(
@@ -570,7 +621,7 @@ fun VirtualOsRoot(
                     onUpdatePreferences = shellViewModel::updatePreferences,
                     onConnectOAuth = { googleServicesViewModel.connectOAuth(preferences.oauthClientId) },
                     onDisconnectOAuth = googleServicesViewModel::disconnectOAuth,
-                    onSignOut = { GoogleAuthHelper.signOut(credentialManager, scope) },
+                    onSignOut = onSignOut,
                     onOpenDiagnostics = { shellViewModel.launchApp(VirtualAppId.DIAGNOSTICS) },
                     onCloseApp = shellViewModel::goHome,
                   )
@@ -580,14 +631,14 @@ fun VirtualOsRoot(
                     usTimezoneId = preferences.usTimezoneId,
                     oauthClientId = preferences.oauthClientId,
                     oauthConnected = tokenState.isConnected,
-                    isSignedIn = true,
+                    isSignedIn = isCloudSignedIn,
                     onRefreshIp = diagnosticsViewModel::refreshPublicIp,
                     onRunFifteenTests = { hasCam ->
                       diagnosticsViewModel.runFifteenTests(
                         usTimezoneId = preferences.usTimezoneId,
                         oauthClientId = preferences.oauthClientId,
                         oauthConnected = tokenState.isConnected,
-                        isSignedIn = true,
+                        isSignedIn = isCloudSignedIn,
                         cloudHealthCheck = shellViewModel::checkCloudHealth,
                         hasCameraHardware = hasCam,
                       )
@@ -661,18 +712,6 @@ fun VirtualOsRoot(
           },
           onBrightnessChange = shellViewModel::setBrightness,
           onOpenApp = shellViewModel::launchApp,
-        )
-
-        FloatingControlPill(
-          onBack = handleBackAction,
-          onHome = {
-            if (shellState.activeApp == VirtualAppId.CHROME) {
-              browserSessionManager.persistImmediately()
-            }
-            shellViewModel.goHome()
-          },
-          onStatusMessage = shellViewModel::showStatus,
-          modifier = Modifier.align(Alignment.CenterEnd).zIndex(5f),
         )
       }
     }

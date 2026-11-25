@@ -21,7 +21,7 @@ import com.example.data.local.BrowserBookmark
 import com.example.data.local.BrowserSessionStore
 import com.example.data.local.PersistedBrowserTab
 import com.example.data.model.BrowserVault
-import com.example.data.repository.VirtualOsRepository
+import com.example.data.repository.VirtualOsDataSource
 import java.net.URLEncoder
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -53,7 +53,7 @@ data class BrowserUiState(
 class BrowserSessionManager(
   private val appContext: Context,
   private val userId: String,
-  private val repository: VirtualOsRepository,
+  private val repository: VirtualOsDataSource,
   private val store: BrowserSessionStore = BrowserSessionStore(appContext),
 ) : ViewModel() {
 

@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PhoneAndroid
@@ -28,8 +30,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,7 +65,11 @@ import java.util.TimeZone
 import kotlinx.coroutines.delay
 
 @Composable
-fun LockAuthScreen(onAuthSuccess: () -> Unit) {
+fun LockAuthScreen(
+  isFirebaseConfigured: Boolean = true,
+  onAuthSuccess: () -> Unit,
+  onContinueWithoutGmail: () -> Unit = {},
+) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   val credentialManager = remember(context) { CredentialManager.create(context) }
@@ -72,14 +80,16 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
   var errorMessage by remember { mutableStateOf<String?>(null) }
   var clockNowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
 
-  LaunchedEffect(Unit) {
-    GoogleAuthHelper.attemptAutoSignIn(
-      context = context,
-      credentialManager = credentialManager,
-      onAuthSuccess = onAuthSuccess,
-      onUnauthenticated = {},
-      scope = scope,
-    )
+  LaunchedEffect(isFirebaseConfigured) {
+    if (isFirebaseConfigured) {
+      GoogleAuthHelper.attemptAutoSignIn(
+        context = context,
+        credentialManager = credentialManager,
+        onAuthSuccess = onAuthSuccess,
+        onUnauthenticated = {},
+        scope = scope,
+      )
+    }
     while (true) {
       clockNowMillis = System.currentTimeMillis()
       delay(10_000L)
@@ -122,13 +132,14 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
     Column(
       modifier =
         Modifier.fillMaxSize()
+          .verticalScroll(rememberScrollState())
           .statusBarsPadding()
           .navigationBarsPadding()
-          .padding(horizontal = 24.dp, vertical = 20.dp)
+          .padding(start = 24.dp, end = 64.dp, top = 20.dp, bottom = 20.dp)
           .widthIn(max = 520.dp)
           .align(Alignment.Center),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.SpaceBetween,
+      verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically),
     ) {
       // Lock Screen Clock Header
       Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -155,7 +166,7 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
           }
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
         Text(
           text = timeStr,
           style = MaterialTheme.typography.displayLarge,
@@ -180,25 +191,25 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
       ) {
         Column(
-          modifier = Modifier.fillMaxWidth().padding(24.dp),
+          modifier = Modifier.fillMaxWidth().padding(22.dp),
           horizontalAlignment = Alignment.CenterHorizontally,
         ) {
           Surface(
-            modifier = Modifier.size(56.dp),
-            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier.size(52.dp),
+            shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.primaryContainer,
           ) {
             Box(contentAlignment = Alignment.Center) {
               Icon(
                 imageVector = Icons.Rounded.PhoneAndroid,
                 contentDescription = "USA Virtual Android Pro",
-                modifier = Modifier.size(30.dp),
+                modifier = Modifier.size(28.dp),
                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
               )
             }
           }
 
-          Spacer(modifier = Modifier.height(16.dp))
+          Spacer(modifier = Modifier.height(14.dp))
           Text(
             text = stringResource(R.string.app_name),
             style = MaterialTheme.typography.headlineMedium,
@@ -213,7 +224,7 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
 
-          Spacer(modifier = Modifier.height(18.dp))
+          Spacer(modifier = Modifier.height(16.dp))
 
           Row(
             modifier = Modifier.fillMaxWidth(),
@@ -247,7 +258,7 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
             }
           }
 
-          Spacer(modifier = Modifier.height(20.dp))
+          Spacer(modifier = Modifier.height(18.dp))
 
           Button(
             onClick = {
@@ -270,18 +281,18 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
                   isLoading = false
                   showBrowserFallback = true
                   errorMessage =
-                    "Google Sign-In did not finish. If selecting your account returns here (SHA-1 mismatch on custom APK), tap Browser Google Sign-In below."
+                    "Google Sign-In did not complete. Tap 'Continue Without Gmail' below to open Virtual OS directly."
                 },
               )
             },
-            enabled = !isLoading && !isBrowserLoading,
+            enabled = isFirebaseConfigured && !isLoading && !isBrowserLoading,
             shape = RoundedCornerShape(24.dp),
             colors =
               ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
               ),
-            modifier = Modifier.fillMaxWidth().height(54.dp).testTag("google_sign_in_button"),
+            modifier = Modifier.fillMaxWidth().height(52.dp).testTag("google_sign_in_button"),
           ) {
             if (isLoading) {
               CircularProgressIndicator(
@@ -299,9 +310,24 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
             }
           }
 
-          if (showBrowserFallback) {
+          Spacer(modifier = Modifier.height(10.dp))
+
+          FilledTonalButton(
+            onClick = onContinueWithoutGmail,
+            enabled = !isLoading && !isBrowserLoading,
+            shape = RoundedCornerShape(24.dp),
+            modifier =
+              Modifier.fillMaxWidth().height(50.dp).testTag("continue_without_gmail_button"),
+          ) {
+            Text(
+              text = "Continue Without Gmail (Local Mode)",
+              style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+            )
+          }
+
+          if (showBrowserFallback && isFirebaseConfigured) {
             Spacer(modifier = Modifier.height(10.dp))
-            androidx.compose.material3.OutlinedButton(
+            OutlinedButton(
               onClick = {
                 errorMessage = null
                 isBrowserLoading = true
@@ -339,7 +365,7 @@ fun LockAuthScreen(onAuthSuccess: () -> Unit) {
       }
 
       Text(
-        text = "16 Apps • Cloud Sync • Real OAuth PKCE & Diagnostics",
+        text = "16 Apps • Local or Cloud Sync • Real OAuth PKCE & Diagnostics",
         style = MonoCodeStyle,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
@@ -379,3 +405,4 @@ private fun HighlightPill(
     }
   }
 }
+

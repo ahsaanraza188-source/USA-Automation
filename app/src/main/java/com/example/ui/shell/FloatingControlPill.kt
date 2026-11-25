@@ -71,13 +71,12 @@ fun FloatingControlPill(
   val audioManager =
     remember(context) { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
 
+  val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
   var isExpanded by remember { mutableStateOf(true) }
-  var offsetY by remember { mutableFloatStateOf(0f) }
+  var offsetY by remember(isLandscape) { mutableFloatStateOf(0f) }
   var isMuted by remember(audioManager) {
     mutableStateOf(runCatching { audioManager.isStreamMute(AudioManager.STREAM_MUSIC) }.getOrDefault(false))
   }
-
-  val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
   Box(
     modifier =

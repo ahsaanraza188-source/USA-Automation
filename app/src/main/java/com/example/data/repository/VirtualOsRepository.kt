@@ -29,7 +29,7 @@ import kotlinx.coroutines.tasks.await
 class VirtualOsRepository(
   private val db: FirebaseFirestore,
   private val auth: FirebaseAuth = Firebase.auth,
-) {
+) : VirtualOsDataSource {
   constructor(
     context: Context
   ) : this(
@@ -64,7 +64,7 @@ class VirtualOsRepository(
   }
 
   // --- NOTES ---
-  fun observeNotes(uid: String): Flow<List<VirtualNote>> {
+  override fun observeNotes(uid: String): Flow<List<VirtualNote>> {
     val path = "users/$uid/notes"
     return userDoc(uid)
       .collection("notes")
@@ -78,7 +78,7 @@ class VirtualOsRepository(
       .logFirestoreErrors(OperationType.LIST, path, uid)
   }
 
-  suspend fun saveNote(note: VirtualNote): String {
+  override suspend fun saveNote(note: VirtualNote): String {
     val uid = requireUserId()
     val collection = userDoc(uid).collection("notes")
     val isCreate = note.id.isBlank()
@@ -121,7 +121,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun deleteNote(noteId: String) {
+  override suspend fun deleteNote(noteId: String) {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("notes").document(noteId)
     try {
@@ -135,7 +135,7 @@ class VirtualOsRepository(
   }
 
   // --- CONTACTS ---
-  fun observeContacts(uid: String): Flow<List<VirtualContact>> {
+  override fun observeContacts(uid: String): Flow<List<VirtualContact>> {
     val path = "users/$uid/contacts"
     return userDoc(uid)
       .collection("contacts")
@@ -149,7 +149,7 @@ class VirtualOsRepository(
       .logFirestoreErrors(OperationType.LIST, path, uid)
   }
 
-  suspend fun saveContact(contact: VirtualContact): String {
+  override suspend fun saveContact(contact: VirtualContact): String {
     val uid = requireUserId()
     val collection = userDoc(uid).collection("contacts")
     val isCreate = contact.id.isBlank()
@@ -193,7 +193,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun deleteContact(contactId: String) {
+  override suspend fun deleteContact(contactId: String) {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("contacts").document(contactId)
     try {
@@ -207,7 +207,7 @@ class VirtualOsRepository(
   }
 
   // --- MESSAGES & THREADS ---
-  fun observeThreads(uid: String): Flow<List<MessageThread>> {
+  override fun observeThreads(uid: String): Flow<List<MessageThread>> {
     val path = "users/$uid/threads"
     return userDoc(uid)
       .collection("threads")
@@ -221,7 +221,7 @@ class VirtualOsRepository(
       .logFirestoreErrors(OperationType.LIST, path, uid)
   }
 
-  fun observeMessages(uid: String, threadId: String): Flow<List<VirtualMessage>> {
+  override fun observeMessages(uid: String, threadId: String): Flow<List<VirtualMessage>> {
     val path = "users/$uid/threads/$threadId/messages"
     return userDoc(uid)
       .collection("threads")
@@ -237,7 +237,7 @@ class VirtualOsRepository(
       .logFirestoreErrors(OperationType.LIST, path, uid)
   }
 
-  suspend fun createOrGetThread(contactName: String, contactPhone: String): String {
+  override suspend fun createOrGetThread(contactName: String, contactPhone: String): String {
     val uid = requireUserId()
     val collection = userDoc(uid).collection("threads")
     val docRef = collection.document()
@@ -264,7 +264,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun sendMessage(threadId: String, sender: String, body: String, isOutgoing: Boolean = true): String {
+  override suspend fun sendMessage(threadId: String, sender: String, body: String, isOutgoing: Boolean): String {
     val uid = requireUserId()
     val threadRef = userDoc(uid).collection("threads").document(threadId)
     val msgRef = threadRef.collection("messages").document()
@@ -300,7 +300,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun deleteThread(threadId: String) {
+  override suspend fun deleteThread(threadId: String) {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("threads").document(threadId)
     try {
@@ -314,7 +314,7 @@ class VirtualOsRepository(
   }
 
   // --- CALENDAR EVENTS ---
-  fun observeEvents(uid: String): Flow<List<CalendarEvent>> {
+  override fun observeEvents(uid: String): Flow<List<CalendarEvent>> {
     val path = "users/$uid/events"
     return userDoc(uid)
       .collection("events")
@@ -328,7 +328,7 @@ class VirtualOsRepository(
       .logFirestoreErrors(OperationType.LIST, path, uid)
   }
 
-  suspend fun saveEvent(event: CalendarEvent): String {
+  override suspend fun saveEvent(event: CalendarEvent): String {
     val uid = requireUserId()
     val collection = userDoc(uid).collection("events")
     val isCreate = event.id.isBlank()
@@ -372,7 +372,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun deleteEvent(eventId: String) {
+  override suspend fun deleteEvent(eventId: String) {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("events").document(eventId)
     try {
@@ -386,7 +386,7 @@ class VirtualOsRepository(
   }
 
   // --- CLOCK ALARMS ---
-  fun observeAlarms(uid: String): Flow<List<VirtualAlarm>> {
+  override fun observeAlarms(uid: String): Flow<List<VirtualAlarm>> {
     val path = "users/$uid/alarms"
     return userDoc(uid)
       .collection("alarms")
@@ -400,7 +400,7 @@ class VirtualOsRepository(
       .logFirestoreErrors(OperationType.LIST, path, uid)
   }
 
-  suspend fun saveAlarm(alarm: VirtualAlarm): String {
+  override suspend fun saveAlarm(alarm: VirtualAlarm): String {
     val uid = requireUserId()
     val collection = userDoc(uid).collection("alarms")
     val isCreate = alarm.id.isBlank()
@@ -444,7 +444,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun deleteAlarm(alarmId: String) {
+  override suspend fun deleteAlarm(alarmId: String) {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("alarms").document(alarmId)
     try {
@@ -458,7 +458,7 @@ class VirtualOsRepository(
   }
 
   // --- FILES METADATA ---
-  fun observeFiles(uid: String): Flow<List<VirtualFileRecord>> {
+  override fun observeFiles(uid: String): Flow<List<VirtualFileRecord>> {
     val path = "users/$uid/files"
     return userDoc(uid)
       .collection("files")
@@ -472,7 +472,7 @@ class VirtualOsRepository(
       .logFirestoreErrors(OperationType.LIST, path, uid)
   }
 
-  suspend fun saveFileRecord(file: VirtualFileRecord): String {
+  override suspend fun saveFileRecord(file: VirtualFileRecord): String {
     val uid = requireUserId()
     val collection = userDoc(uid).collection("files")
     val isCreate = file.id.isBlank()
@@ -518,7 +518,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun deleteFileRecord(fileId: String) {
+  override suspend fun deleteFileRecord(fileId: String) {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("files").document(fileId)
     try {
@@ -532,7 +532,7 @@ class VirtualOsRepository(
   }
 
   // --- DEVICE PREFERENCES ---
-  fun observePreferences(uid: String): Flow<DevicePreferences> {
+  override fun observePreferences(uid: String): Flow<DevicePreferences> {
     val path = "users/$uid/preferences/$SETTINGS_DOC_ID"
     return userDoc(uid)
       .collection("preferences")
@@ -547,7 +547,7 @@ class VirtualOsRepository(
       .logFirestoreErrors(OperationType.GET, path, uid)
   }
 
-  suspend fun savePreferences(prefs: DevicePreferences) {
+  override suspend fun savePreferences(prefs: DevicePreferences) {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("preferences").document(SETTINGS_DOC_ID)
     try {
@@ -590,7 +590,7 @@ class VirtualOsRepository(
   }
 
   // --- CLOUD BROWSER SESSION VAULT ---
-  suspend fun loadBrowserVault(uid: String): BrowserVault? {
+  override suspend fun loadBrowserVault(uid: String): BrowserVault? {
     val docRef = userDoc(uid).collection("browser_vault").document(BROWSER_VAULT_DOC_ID)
     return try {
       docRef
@@ -605,7 +605,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun saveBrowserVault(vault: BrowserVault) {
+  override suspend fun saveBrowserVault(vault: BrowserVault) {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("browser_vault").document(BROWSER_VAULT_DOC_ID)
     val safeIndex = vault.activeTabIndex.coerceIn(0L, 50L)
@@ -648,7 +648,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun clearBrowserVault() {
+  override suspend fun clearBrowserVault() {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("browser_vault").document(BROWSER_VAULT_DOC_ID)
     try {
@@ -661,7 +661,7 @@ class VirtualOsRepository(
     }
   }
 
-  suspend fun verifyCloudHealth(): Boolean {
+  override suspend fun verifyCloudHealth(): Boolean {
     val uid = requireUserId()
     val docRef = userDoc(uid).collection("preferences").document(SETTINGS_DOC_ID)
     return try {

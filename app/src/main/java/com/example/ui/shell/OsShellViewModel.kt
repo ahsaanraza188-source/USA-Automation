@@ -11,7 +11,7 @@ import com.example.data.model.VirtualContact
 import com.example.data.model.VirtualFileRecord
 import com.example.data.model.VirtualMessage
 import com.example.data.model.VirtualNote
-import com.example.data.repository.VirtualOsRepository
+import com.example.data.repository.VirtualOsDataSource
 import com.example.domain.VirtualAppId
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -56,7 +56,7 @@ data class ShellUiState(
 )
 
 class OsShellViewModel(
-  private val repository: VirtualOsRepository,
+  private val repository: VirtualOsDataSource,
   val currentUserId: String,
 ) : ViewModel() {
 
